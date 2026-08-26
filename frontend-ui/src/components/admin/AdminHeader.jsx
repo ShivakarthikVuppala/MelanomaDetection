@@ -1,25 +1,20 @@
 import { useState, useEffect, useRef } from 'react';
-import { useAuth } from './AuthContext';
+import { useAuth } from '../AuthContext';
 
 const pageNames = {
-  dashboard: 'Dashboard',
-  upload: 'Upload & Analyze',
-  analysis: 'Analysis',
-  results: 'Results',
-  reports: 'Reports',
-  settings: 'Settings',
-  help: 'Help',
-  profile: 'Profile',
+  dashboard: 'Admin Dashboard',
+  users: 'User Management',
+  settings: 'Admin Settings',
 };
 
-export default function Header({ activePage, onNavigate }) {
+export default function AdminHeader({ activePage, onNavigate }) {
   const { user, logout } = useAuth();
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const dropdownRef = useRef(null);
 
   const initials =
-    ((user?.first_name?.[0] || '') + (user?.last_name?.[0] || '')).toUpperCase() || 'U';
-  const displayName = user ? `${user.first_name} ${user.last_name}` : 'User';
+    ((user?.first_name?.[0] || '') + (user?.last_name?.[0] || '')).toUpperCase() || 'A';
+  const displayName = user ? `${user.first_name} ${user.last_name}` : 'Admin';
 
   // Close dropdown on outside click
   useEffect(() => {
@@ -43,18 +38,15 @@ export default function Header({ activePage, onNavigate }) {
   };
 
   return (
-    <header className="header">
+    <header className="header" style={{ borderBottomColor: 'var(--accent-red-bg)' }}>
       <div className="header-left">
         <div className="header-breadcrumb">
-          <span>MelaDetect AI</span>
+          <span>MelaDetect AI Admin</span>
           <i className="fas fa-chevron-right" style={{ fontSize: '10px' }}></i>
           <span className="current">{pageNames[activePage] || activePage}</span>
         </div>
       </div>
       <div className="header-right">
-        <button className="header-btn" title="Notifications">
-          <i className="fas fa-bell"></i>
-        </button>
         <div className="header-user-menu" ref={dropdownRef}>
           <button
             className="header-user"
@@ -62,7 +54,7 @@ export default function Header({ activePage, onNavigate }) {
             aria-expanded={dropdownOpen}
             aria-haspopup="true"
           >
-            <div className="header-avatar">{initials}</div>
+            <div className="header-avatar" style={{background: 'var(--accent-red)'}}>{initials}</div>
             <span className="header-user-name">{displayName}</span>
             <i className={`fas fa-chevron-down header-chevron ${dropdownOpen ? 'rotated' : ''}`}></i>
           </button>
@@ -70,17 +62,13 @@ export default function Header({ activePage, onNavigate }) {
           {dropdownOpen && (
             <div className="header-dropdown">
               <div className="header-dropdown-user">
-                <div className="header-dropdown-avatar">{initials}</div>
+                <div className="header-dropdown-avatar" style={{background: 'var(--accent-red)'}}>{initials}</div>
                 <div>
                   <div className="header-dropdown-name">{displayName}</div>
                   <div className="header-dropdown-email">{user?.email}</div>
                 </div>
               </div>
               <div className="header-dropdown-divider"></div>
-              <button className="header-dropdown-item" onClick={() => handleDropdownAction('profile')}>
-                <i className="fas fa-user-circle"></i>
-                <span>Profile</span>
-              </button>
               <button className="header-dropdown-item" onClick={() => handleDropdownAction('settings')}>
                 <i className="fas fa-cog"></i>
                 <span>Settings</span>

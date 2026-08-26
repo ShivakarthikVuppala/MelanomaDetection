@@ -28,6 +28,8 @@ if env_path.exists():
                 key, val = line.split("=", 1)
                 os.environ[key.strip()] = val.strip()
 
+from .auth import router as auth_router
+from .admin import router as admin_router
 from .schemas import (
     AnalysisResponse, AnalysisListItem, PhaseStatus,
     DiagnosisResultOut, DiagnosisInfoOut, FeatureScoreOut,
@@ -61,9 +63,11 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins,
     allow_credentials=True,
-    allow_methods=["GET", "POST"],
+    allow_methods=["GET", "POST", "PUT", "OPTIONS"],
     allow_headers=["Content-Type", "Authorization"],
 )
+app.include_router(auth_router)
+app.include_router(admin_router)
 app.mount("/static/outputs", StaticFiles(directory=str(OUTPUTS_DIR)), name="outputs")
 app.mount("/static/uploads", StaticFiles(directory=str(UPLOADS_DIR)), name="uploads")
 
