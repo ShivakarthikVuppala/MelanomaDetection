@@ -1,0 +1,132 @@
+# =============================================================================
+# Phase 1 — Core AI Melanoma Diagnosis Engine
+# Single Configuration File
+# =============================================================================
+
+project:
+  name: melanoma_phase1
+  version: "1.0.0"
+  seed: 42
+  device: auto  # auto | cuda | cpu
+
+# ---------------------------------------------------------------------------
+# Preprocessing
+# ---------------------------------------------------------------------------
+preprocessing:
+  hair_removal: true
+  illumination_normalization: true
+  preserve_scale_reference: true
+
+# Technical input gate only; these are conservative baselines and should be
+# calibrated against representative validation images before production use.
+quality:
+  min_width: 256
+  min_height: 256
+  max_aspect_ratio: 4.0
+  min_laplacian_variance: 5.0
+  max_extreme_pixel_ratio: 0.98
+
+# ---------------------------------------------------------------------------
+# Module 3 — Swin Transformer V2 Classification
+# ---------------------------------------------------------------------------
+classification:
+  model_name: swinv2_base_window12to16_192to256
+  num_classes: 2
+  class_names:
+    - melanoma
+    - non_melanoma
+  # NOTE: class_to_idx follows sorted alphabetical order from the Kaggle dataset:
+  #   melanoma     -> index 0
+  #   non_melanoma -> index 1
+  # The production inference code reads class mapping from the checkpoint.
+  melanoma_class_name: melanoma
+  # Validation-optimized via Youden's J (sensitivity >= 0.9 floor) on the
+  # Kaggle training notebook's validation set. The checkpoint also stores
+  # this value, and the inference code now prefers the checkpoint's copy.
+  classification_threshold: 0.21
+  img_size: 256
+  batch_size: 16          # Kaggle T4: 16 | Local RTX 4050: 4
+  num_workers: 4
+  max_epochs: 50
+  lr_head: 1.0e-4
+  lr_backbone: 1.0e-5
+  weight_decay: 1.0e-2
+  early_stopping_patience: 7
+  label_smoothing: 0.1
+
+# ---------------------------------------------------------------------------
+# Module 4 — SegFormer Segmentation
+# ---------------------------------------------------------------------------
+segmentation:
+  checkpoint: checkpoints/segformer_best.pt
+  encoder_name: mit_b2
+  input_size: 512
+  morphological_closing_kernel: 5
+
+# ---------------------------------------------------------------------------
+# Module 5 — ABC Feature Extraction
+# ---------------------------------------------------------------------------
+features:
+  asymmetry:
+    low_threshold: 0.15
+    high_threshold: 0.35
+  border:
+    smooth_threshold: 0.85
+    irregular_threshold: 0.65
+  color:
+    min_cluster_ratio: 0.05
+    max_clusters: 6
+
+# ---------------------------------------------------------------------------
+# Paths
+# ---------------------------------------------------------------------------
+paths:
+  dataset_root: dataset/
+  classification_train: dataset/classification/train/
+  classification_val: dataset/classification/val/
+  classification_test: dataset/classification/test/
+  segmentation_images: dataset/segmentation/images/
+  segmentation_masks: dataset/segmentation/masks/
+  checkpoints: checkpoints/
+  # New model trained with Codex — used for all live inference and Grad-CAM.
+  classification_checkpoint: codex-model/best_swin_checkpoint.pth
+  outputs: outputs/
+
+# ---------------------------------------------------------------------------
+# Phase 2 — Medical Evidence Retrieval
+# ---------------------------------------------------------------------------
+retrieval:
+  embedding_model: BAAI/bge-small-en-v1.5
+  embedding_model_path: models/bge-small-en-v1.5
+  embedding_cache_dir: models/embedding_cache
+  knowledge_base: data/knowledge_base.json
+  qdrant_mode: disk            # memory | disk | docker
+  qdrant_path: data/qdrant_db
+  top_k: 5
+
+# ---------------------------------------------------------------------------
+# Phase 3 — Explainability
+# ---------------------------------------------------------------------------
+explainability:
+  mode: llm                    # template | llm
+  llm_provider: gemini          # gemini (requires GEMINI_API_KEY env var)
+  model: gemini-3.6-flash
+  gradcam_ail_threshold: 0.30
+
+# ---------------------------------------------------------------------------
+# Phase 4 — Report Generation
+# ---------------------------------------------------------------------------
+report:
+  output_dir: outputs/reports/
+  include_gradcam: true
+  include_evidence: true
+
+# ---------------------------------------------------------------------------
+# Orchestrator Agent — Agentic Decision Thresholds
+# ---------------------------------------------------------------------------
+orchestrator:
+  classification_confidence_threshold: 70.0
+  segmentation_min_area_px: 100
+  segmentation_max_area_ratio: 0.90
+  gradcam_reliability_threshold: 0.30
+  max_retry_attempts: 1

@@ -1,0 +1,3 @@
+CAR T targets: AI takes the wheel.
+
+Identifying safe and effective targets remains a major bottleneck for CAR T cell therapies. In this issue of Cell, Baker and colleagues developed a large language model (LLM)-assisted scoring framework to streamline this process and as a result identified and validated glycoprotein non-metastatic melanoma protein B (GPNMB) as a candidate chimeric antigen receptor (CAR) T target across melanoma, leukemia, and colorectal cancer.

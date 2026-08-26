@@ -1,0 +1,3 @@
+Retraction notice to "An optimal method for melanoma detection from dermoscopy images using reinforcement learning and support vector machine optimized by enhanced fish migration optimization algorithm" [Heliyon 9 (2023) e21118].
+
+[This retracts the article DOI: 10.1016/j.heliyon.2023.e21118.].

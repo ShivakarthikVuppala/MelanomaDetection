@@ -1,0 +1,48 @@
+# Phase 1 — Core AI Melanoma Diagnosis Engine
+# Install PyTorch separately with CUDA:
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
+
+torch>=2.5.0
+torchvision>=0.20.0
+
+# Image Models
+timm>=1.0.0
+
+# Augmentation & CV
+albumentations==2.0.8
+opencv-python-headless>=4.10.0
+scikit-image>=0.24.0
+scikit-learn>=1.5.0
+
+# Data & Config
+pydantic>=2.0.0
+numpy>=1.26.0
+Pillow>=10.0.0
+pandas>=2.2.0
+pyyaml>=6.0
+
+# Visualization & Metrics
+matplotlib>=3.9.0
+seaborn>=0.13.0
+tqdm>=4.66.0
+
+# Explainability (Grad-CAM for Vision Transformers)
+grad-cam>=1.5.0
+
+# MedSAM dependency (install separately):
+#   pip install git+https://github.com/facebookresearch/segment-anything.git
+
+# Phase 2 — Medical Evidence Retrieval
+sentence-transformers>=3.0.0
+qdrant-client>=1.9.0
+
+# Phase 4 — Report Generation
+fpdf2>=2.8.0
+
+# API Server
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+python-multipart>=0.0.9
+
+# Phase 3 — LLM Explainability (Gemini)
+google-genai>=1.0.0

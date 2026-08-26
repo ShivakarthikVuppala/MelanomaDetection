@@ -1,0 +1,3 @@
+Reliable Enough? Benchmarking LLMs for Clinical Concept Extraction.
+
+Language models (LMs) offer promise for automating concept extraction, a task traditionally reliant on manual curation and earlier natural language processing (NLP) methods. We present a benchmarking approach to systematically evaluate on-premises LM performance. Using identification of first-line pharmacological treatments in melanoma patients as a test case, we demonstrate how this method supports structured comparison and error analysis for local models. Results indicate the importance of prompt design, and that small models struggle with layered reasoning tasks, such as sequencing interventions. These findings suggest that LMs are best deployed as supportive tools requiring careful evaluation.
