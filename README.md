@@ -9,7 +9,7 @@ Dermoscopic Image → Validation → Preprocessing
                                       │
                         ┌──────────────┴──────────────┐
                         ▼                             ▼
-                Swin Transformer V2              MedSAM
+                Swin Transformer V2              SegFormer
                 (Classification)              (Segmentation)
                         │                             │
                         └──────────────┬──────────────┘
@@ -35,15 +35,12 @@ pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
 pip install -r requirements.txt
 ```
 
-### 3. Install MedSAM
+### 3. Install SegFormer
 
-```bash
-pip install git+https://github.com/facebookresearch/segment-anything.git
-```
 
 ### 4. Download Checkpoints
 
-- **MedSAM**: Download `medsam_vit_b.pth` from the [MedSAM repository](https://github.com/bowang-lab/MedSAM) → place in `checkpoints/`
+- **SegFormer**: Download `SegFormer_vit_b.pth` from the [SegFormer repository](https://github.com/bowang-lab/SegFormer) → place in `checkpoints/`
 - **Swin V2**: Train on Kaggle using `notebooks/train_swin_classifier.ipynb` → download `swin_best.pth` → place in `checkpoints/`
 
 ### 5. Prepare Dataset
@@ -112,7 +109,7 @@ The diagnosis engine produces a `DiagnosisResult` JSON:
 |---|---|
 | `src/data/` | Dataset classes, augmentation, validation |
 | `src/classification/` | Swin V2 model, training, inference |
-| `src/segmentation/` | MedSAM wrapper, lesion locator |
+| `src/segmentation/` | SegFormer wrapper, lesion locator |
 | `src/features/` | ABC feature extraction with registry pattern |
 | `src/engine/` | Inference pipeline + Core Diagnosis Engine |
 | `src/evaluation/` | Classification and segmentation metrics |
