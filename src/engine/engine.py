@@ -204,7 +204,7 @@ class CoreDiagnosisEngine:
         if (
             mask.ndim != 2
             or mask_area < min_area
-            or mask_area / max(image_area, 1) >= min(max_ratio, 0.35)
+            or mask_area / max(image_area, 1) >= max_ratio
             or connected < 1
         ):
             raise RuntimeError("segmentation_failed")
