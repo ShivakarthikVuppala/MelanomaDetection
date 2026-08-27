@@ -80,14 +80,12 @@ class SwinV2Predictor:
             if checkpoint_names is None and raw.get("class_to_idx"):
                 checkpoint_names = [name for name, _ in sorted(raw["class_to_idx"].items(), key=lambda item: item[1])]
             self.class_names = list(checkpoint_names or class_names or ["melanoma", "non_melanoma"])
-            # Checkpoint threshold ALWAYS wins over config/constructor arg.
-            # The notebook saves it as "threshold"; older checkpoints may use
-            # "classification_threshold".  Fall back to the constructor arg
-            # only when the checkpoint carries neither key.
+            # Configured threshold from config.yaml ALWAYS wins over checkpoint.
+            # Fall back to checkpoint threshold if config does not specify one.
             checkpoint_threshold = raw.get("threshold", raw.get("classification_threshold"))
             self.classification_threshold = float(
-                checkpoint_threshold if checkpoint_threshold is not None
-                else (classification_threshold if classification_threshold is not None else 0.5)
+                classification_threshold if classification_threshold is not None
+                else (checkpoint_threshold if checkpoint_threshold is not None else 0.5)
             )
             ckpt_config = raw.get("model_config", {})
             model_name = ckpt_config.get("model_name", model_name)
