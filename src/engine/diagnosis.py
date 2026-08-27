@@ -71,6 +71,14 @@ class ScaleCalibrationInfo(BaseModel):
     tick_positions_px: Optional[list[float]] = None
     tick_spacing_px: Optional[float] = None
     validated_tick_count: int = 0
+    reference_points_px: Optional[list[tuple[float, float]]] = None
+    reprojection_error_px: Optional[float] = None
+    calibration_uncertainty: Optional[float] = None
+    warnings: list[str] = Field(default_factory=list)
+    homography: Optional[list[list[float]]] = None
+    axis_endpoints_px: Optional[tuple[tuple[float, float], tuple[float, float]]] = None
+    tick_points_px: Optional[list[tuple[float, float]]] = None
+    interval_residuals_px: Optional[list[float]] = None
 
 
 class PipelineInfo(BaseModel):

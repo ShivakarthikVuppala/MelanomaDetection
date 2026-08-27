@@ -52,7 +52,7 @@ def run_classification_evaluation(config_path: str = "config.yaml") -> dict:
     # Load checkpoint (support both raw state_dict and full checkpoint)
     checkpoint_setting = paths.get("classification_checkpoint")
     ckpt_path = resolve_config_path(checkpoint_setting) if checkpoint_setting else (
-        resolve_config_path("codex-model") / "best_swin_checkpoint.pth"
+        resolve_config_path("checkpoints") / "best_swin_checkpoint.pth"
     )
     raw = torch.load(ckpt_path, map_location=device, weights_only=False)
 

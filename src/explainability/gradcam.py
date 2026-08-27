@@ -11,7 +11,7 @@ is solely to validate that the classifier attends to the lesion
 region rather than background artifacts (hair, rulers, ink marks).
 
 Usage:
-    gradcam = SwinGradCAM("codex-model/best_swin_checkpoint.pth")
+    gradcam = SwinGradCAM("checkpoints/best_swin_checkpoint.pth")
     result = gradcam.generate("image.jpg")
     gradcam.save_visualization("image.jpg", "outputs/gradcam_samples/")
 """

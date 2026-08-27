@@ -70,15 +70,16 @@ class CoreDiagnosisEngine:
             hair_removal=preproc_cfg.get("hair_removal", True),
             illumination_normalization=preproc_cfg.get("illumination_normalization", True),
             preserve_scale_reference=preproc_cfg.get("preserve_scale_reference", True),
+            max_processing_dimension=preproc_cfg.get("max_processing_dimension", 1600),
         )
 
         # Classifier — prefer explicit classification_checkpoint; fall back to
-        # legacy best_swin_checkpoint.pth inside the codex-model folder.
+        # legacy best_swin_checkpoint.pth inside the checkpoints folder.
         project_root = Path(self.config_path).parent
         if paths.get("classification_checkpoint"):
             checkpoint = str(project_root / paths["classification_checkpoint"])
         else:
-            checkpoint = str(project_root / "codex-model" / "best_swin_checkpoint.pth")
+            checkpoint = str(project_root / "checkpoints" / "best_swin_checkpoint.pth")
         self.classifier = SwinV2Predictor(
             checkpoint_path=checkpoint,
             model_name=cls_cfg["model_name"],
@@ -159,6 +160,10 @@ class CoreDiagnosisEngine:
             known_diameter_mm=scale_reference_mm,
             reference_key=scale_reference_key,
             lesion_mask=raw_mask,
+            aruco_marker_size_mm=self.config.get("calibration", {}).get("aruco_marker_size_mm"),
+            aruco_marker_id=self.config.get("calibration", {}).get("aruco_marker_id"),
+            checkerboard_inner_corners=tuple(self.config.get("calibration", {}).get("checkerboard_inner_corners", [])) or None,
+            checkerboard_square_size_mm=self.config.get("calibration", {}).get("checkerboard_square_size_mm"),
         )
         pixels_per_mm = (
             scale_cal.pixels_per_mm if scale_cal.calibration_valid else None
@@ -180,16 +185,16 @@ class CoreDiagnosisEngine:
         except ValueError as exc:
             raise RuntimeError("segmentation_failed") from exc
         components_before_cleanup = int(cv2.connectedComponents((mask > 0).astype(np.uint8))[0] - 1)
-        if pixels_per_mm:
-            # Use the hair-cleaned image only to decide which pixels belong to
-            # the lesion core.  The original image remains the measurement
-            # source, so no inpainting or resize changes the final geometry.
-            cleaned_mask = refine_mask_with_scale(
-                raw.get("hair_removed_image", raw["preprocessed_image"]),
-                mask, pixels_per_mm,
-            )
-            if int((cleaned_mask > 0).sum()) > 0:
-                mask = cleaned_mask
+        # Segmentation refinement is independent of physical calibration.
+        # Previously this block ran only when pixels_per_mm existed, so an
+        # uncertain ruler silently caused the raw, inflated model mask to be
+        # measured. Calibration controls only the px->mm conversion.
+        cleaned_mask = refine_mask_with_scale(
+            raw.get("hair_removed_image", raw["preprocessed_image"]),
+            mask, pixels_per_mm or 1.0,
+        )
+        if int((cleaned_mask > 0).sum()) > 0:
+            mask = cleaned_mask
         components_after_cleanup = int(cv2.connectedComponents((mask > 0).astype(np.uint8))[0] - 1)
         mask_area = int((mask > 0).sum())
         image_area = int(mask.shape[0] * mask.shape[1])
@@ -318,6 +323,14 @@ class CoreDiagnosisEngine:
             tick_positions_px=list(scale_cal.tick_positions_px) if scale_cal.tick_positions_px is not None else None,
             tick_spacing_px=scale_cal.tick_spacing_px,
             validated_tick_count=len(scale_cal.tick_positions_px) if scale_cal.tick_positions_px is not None else 0,
+            reference_points_px=list(scale_cal.reference_points_px) if scale_cal.reference_points_px is not None else None,
+            reprojection_error_px=scale_cal.reprojection_error_px,
+            calibration_uncertainty=scale_cal.calibration_uncertainty,
+            warnings=list(scale_cal.warnings),
+            homography=[list(row) for row in scale_cal.homography] if scale_cal.homography is not None else None,
+            axis_endpoints_px=scale_cal.axis_endpoints_px,
+            tick_points_px=list(scale_cal.tick_points_px) if scale_cal.tick_points_px is not None else None,
+            interval_residuals_px=list(scale_cal.interval_residuals_px) if scale_cal.interval_residuals_px is not None else None,
         )
 
         # Update diameter interpretation
@@ -346,12 +359,18 @@ class CoreDiagnosisEngine:
         area_px = measurements["lesion"]["area_px"]
         perimeter_px = measurements["lesion"]["perimeter_px"]
 
-        # Compute quantitative Grad-CAM metrics
-        try:
-            cam_result = self.gradcam.generate_from_array(raw["preprocessed_image"])
-            cam_metrics = SwinGradCAM.compute_metrics(cam_result["heatmap"], mask)
-            explainability = ExplainabilityInfo(**cam_metrics)
-        except Exception:
+        # Grad-CAM requires a second model pass with gradients and is the
+        # dominant avoidable CPU cost on machines without CUDA.  It is
+        # optional because diagnosis, segmentation, calibration, and the
+        # report remain valid without it.
+        if self.config.get("explainability", {}).get("compute_gradcam", False):
+            try:
+                cam_result = self.gradcam.generate_from_array(raw["preprocessed_image"])
+                cam_metrics = SwinGradCAM.compute_metrics(cam_result["heatmap"], mask)
+                explainability = ExplainabilityInfo(**cam_metrics)
+            except Exception:
+                explainability = ExplainabilityInfo()
+        else:
             explainability = ExplainabilityInfo()
 
         return DiagnosisResult(

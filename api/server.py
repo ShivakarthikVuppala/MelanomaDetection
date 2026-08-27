@@ -97,7 +97,7 @@ def _configured_model_paths() -> tuple[Path, Path]:
     )
     classification_path = _resolve_project_path(
         paths.get("classification_checkpoint"),
-        PROJECT_ROOT / "codex-model" / "best_swin_checkpoint.pth",
+        PROJECT_ROOT / "checkpoints" / "best_swin_checkpoint.pth",
     )
     segmentation_path = _resolve_project_path(
         config.get("segmentation", {}).get("checkpoint"),
@@ -230,6 +230,14 @@ def _workflow_to_response(state, original_image_url: Optional[str]) -> AnalysisR
             tick_positions_px=sc.tick_positions_px,
             tick_spacing_px=sc.tick_spacing_px,
             validated_tick_count=sc.validated_tick_count,
+            reference_points_px=sc.reference_points_px,
+            reprojection_error_px=sc.reprojection_error_px,
+            calibration_uncertainty=sc.calibration_uncertainty,
+            warnings=sc.warnings,
+            homography=sc.homography,
+            axis_endpoints_px=sc.axis_endpoints_px,
+            tick_points_px=sc.tick_points_px,
+            interval_residuals_px=sc.interval_residuals_px,
         )
         diagnosis_out.scale_calibration = scale_cal_out
 

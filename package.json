@@ -1,0 +1,12 @@
+{
+  "name": "melanoma-detection-root",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "start": "concurrently \"python main.py serve\" \"npm run dev --prefix frontend-ui\"",
+    "postinstall": "npm install --prefix frontend-ui"
+  },
+  "devDependencies": {
+    "concurrently": "^10.0.5"
+  }
+}

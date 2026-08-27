@@ -40,6 +40,7 @@ class SegFormerSegmenter:
         )
         self.input_size = input_size
         self.closing_kernel = closing_kernel
+        self.last_probability_map = None
 
         # Load SegFormer model
         self.model = smp.Segformer(
@@ -109,6 +110,7 @@ class SegFormerSegmenter:
             low_res_mask, (H, W),
             order=1, preserve_range=True, anti_aliasing=False,
         )
+        self.last_probability_map = mask_full.astype(np.float32, copy=False)
 
         # 3. Binarize
         binary_mask = (mask_full > 0.5).astype(np.uint8)

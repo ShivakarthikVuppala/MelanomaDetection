@@ -155,9 +155,14 @@ export default function Upload({ onAnalysisComplete }) {
     setUploadPercent(0);
     setError(null);
 
-    const timer = window.setInterval(() => {
-      setStep((current) => Math.min(current + 1, STATUS_STEPS.length - 1));
-    }, 2500);
+    let timer = null;
+    const startTimer = () => {
+      if (!timer) {
+        timer = window.setInterval(() => {
+          setStep((current) => Math.min(current + 1, STATUS_STEPS.length - 1));
+        }, 2500);
+      }
+    };
 
     try {
       const formData = new FormData();
@@ -175,7 +180,11 @@ export default function Upload({ onAnalysisComplete }) {
         request.open('POST', '/api/analyze');
         request.responseType = 'json';
         request.upload.onprogress = (event) => {
-          if (event.lengthComputable) setUploadPercent(Math.round((event.loaded / event.total) * 100));
+          if (event.lengthComputable) {
+            const pct = Math.round((event.loaded / event.total) * 100);
+            setUploadPercent(pct);
+            if (pct >= 100) startTimer();
+          }
         };
         request.onload = () => {
           const body = request.response || {};
@@ -186,7 +195,7 @@ export default function Upload({ onAnalysisComplete }) {
         request.send(formData);
       });
 
-      window.clearInterval(timer);
+      if (timer) window.clearInterval(timer);
       setStep(STATUS_STEPS.length - 1);
       setUploadPercent(100);
       setIsAnalyzing(false);
@@ -194,7 +203,7 @@ export default function Upload({ onAnalysisComplete }) {
       if (result.status === 'completed') showToast('Analysis complete.', 'success');
       onAnalysisComplete(result);
     } catch (requestError) {
-      window.clearInterval(timer);
+      if (timer) window.clearInterval(timer);
       setIsAnalyzing(false);
       setError(requestError.message);
       showToast(requestError.message, 'error');
@@ -268,7 +277,7 @@ export default function Upload({ onAnalysisComplete }) {
             <div className="analysis-card">
               <h2>Analysis in progress</h2>
               <p>{step === 0 && uploadPercent < 100 ? `${STATUS_STEPS[step]} ${uploadPercent}%` : STATUS_STEPS[step]}</p>
-              <div className="progress-bar-container"><div className="progress-bar" style={{ width: `${step === 0 ? Math.max(8, uploadPercent) : ((step + 1) / STATUS_STEPS.length) * 100}%` }} /></div>
+              <div className="progress-bar-container"><div className="progress-bar" style={{ width: `${step === 0 ? Math.max(2, (uploadPercent / 100) * (100 / STATUS_STEPS.length)) : ((step + 1) / STATUS_STEPS.length) * 100}%` }} /></div>
               <div className="pipeline-stepper" aria-label="Analysis progress">
                 {STATUS_STEPS.map((label, index) => (
                   <div className="pipeline-step" key={label}>

@@ -104,7 +104,8 @@ class InferencePipeline:
             seg_future = executor.submit(self._segment, preprocessed)
 
             cls_result = cls_future.result()
-            mask = seg_future.result()
+        mask = seg_future.result()
+        probability_map = getattr(self.segmenter, "last_probability_map", None)
 
         # 3. ABC Feature Extraction (sequential — needs the mask)
         features = self.feature_extractor.extract_all(preprocessed, mask)
@@ -113,6 +114,7 @@ class InferencePipeline:
             "original_image": image,
             "classification": cls_result,
             "mask": mask,
+            "probability_map": probability_map,
             "features": features,
             "preprocessed_image": preprocessed,
             "hair_removed_image": hair_removed,

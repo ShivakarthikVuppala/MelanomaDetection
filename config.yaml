@@ -16,6 +16,7 @@ preprocessing:
   hair_removal: true
   illumination_normalization: true
   preserve_scale_reference: true
+  max_processing_dimension: 1600
 
 # Technical input gate only; these are conservative baselines and should be
 # calibrated against representative validation images before production use.
@@ -25,6 +26,14 @@ quality:
   max_aspect_ratio: 4.0
   min_laplacian_variance: 5.0
   max_extreme_pixel_ratio: 0.98
+
+# Optional planar reference metadata. Leave null when absent; no physical
+# scale is invented when the image has no validated reference.
+calibration:
+  aruco_marker_size_mm: null
+  aruco_marker_id: null
+  checkerboard_inner_corners: []
+  checkerboard_square_size_mm: null
 
 # ---------------------------------------------------------------------------
 # Module 3 — Swin Transformer V2 Classification
@@ -89,7 +98,7 @@ paths:
   segmentation_masks: dataset/segmentation/masks/
   checkpoints: checkpoints/
   # New model trained with Codex — used for all live inference and Grad-CAM.
-  classification_checkpoint: codex-model/best_swin_checkpoint.pth
+  classification_checkpoint: checkpoints/best_swin_checkpoint.pth
   outputs: outputs/
 
 # ---------------------------------------------------------------------------
@@ -112,6 +121,7 @@ explainability:
   llm_provider: gemini          # gemini (requires GEMINI_API_KEY env var)
   model: gemini-3.6-flash
   gradcam_ail_threshold: 0.30
+  compute_gradcam: false
 
 # ---------------------------------------------------------------------------
 # Phase 4 — Report Generation

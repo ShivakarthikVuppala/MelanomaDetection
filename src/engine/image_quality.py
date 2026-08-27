@@ -25,7 +25,7 @@ def check_image_quality(
     min_width: int = 256,
     min_height: int = 256,
     max_aspect_ratio: float = 4.0,
-    min_laplacian_variance: float = 20.0,
+    min_laplacian_variance: float = 5.0,
     max_extreme_pixel_ratio: float = 0.98,
 ) -> ImageQualityResult:
     """Check image readability, dimensions, exposure and severe blur.
@@ -60,6 +60,12 @@ def check_image_quality(
     image_u8 = np.asarray(np.clip(image, 0, 255), dtype=np.uint8)
     gray = cv2.cvtColor(image_u8, cv2.COLOR_RGB2GRAY)
     laplacian_variance = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+    # Whole-frame Laplacian variance is easily depressed by a large smooth
+    # skin background even when the lesion itself is sharp.  Use a robust
+    # local edge signal as a second condition for rejection.
+    gx = cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3)
+    gy = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3)
+    edge_strength_p95 = float(np.percentile(cv2.magnitude(gx, gy), 95))
     dark_ratio = float(np.mean(gray <= 5))
     bright_ratio = float(np.mean(gray >= 250))
     extreme_ratio = max(dark_ratio, bright_ratio)
@@ -69,6 +75,7 @@ def check_image_quality(
         "height": height,
         "aspect_ratio": round(aspect, 3),
         "laplacian_variance": round(laplacian_variance, 3),
+        "edge_strength_p95": round(edge_strength_p95, 3),
         "dark_pixel_ratio": round(dark_ratio, 4),
         "bright_pixel_ratio": round(bright_ratio, 4),
     }
@@ -79,7 +86,7 @@ def check_image_quality(
             "The image is almost completely dark or overexposed. Please retake it using even lighting.",
             metrics=metrics,
         )
-    if laplacian_variance < min_laplacian_variance:
+    if laplacian_variance < min_laplacian_variance and edge_strength_p95 < 12.0:
         return ImageQualityResult(
             False,
             "The image appears too blurry for reliable analysis. Please keep the lesion sharply focused and retake it.",
