@@ -19,6 +19,7 @@ Usage:
 
 import json
 import logging
+import threading
 from pathlib import Path
 from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional
@@ -50,6 +51,7 @@ class MedicalRetrievalAgent:
     """
 
     COLLECTION_NAME = "medical_evidence"
+    _initialization_lock = threading.Lock()
 
     def __init__(self, config: Dict[str, Any]):
         self.config = config
@@ -73,63 +75,70 @@ class MedicalRetrievalAgent:
         if self._initialized:
             return
 
-        from sentence_transformers import SentenceTransformer
-        from qdrant_client import QdrantClient
-        from qdrant_client.models import Distance, VectorParams, PointStruct
-        import transformers
+        # Several API requests can reach retrieval simultaneously on the
+        # first request.  Only one thread may load the encoder/open the local
+        # Qdrant store; the other requests reuse the initialized objects.
+        with self._initialization_lock:
+            if self._initialized:
+                return
+
+            from sentence_transformers import SentenceTransformer
+            from qdrant_client import QdrantClient
+            from qdrant_client.models import Distance, VectorParams, PointStruct
+            import transformers
         
-        # Suppress the "Loading weights" progress bar
-        transformers.utils.logging.disable_progress_bar()
+            # Suppress the "Loading weights" progress bar
+            transformers.utils.logging.disable_progress_bar()
 
-        if self._model_path and self._model_path.exists():
-            logger.info("Loading cached BGE embedding model from local storage")
-            self._encoder = SentenceTransformer(str(self._model_path))
-        else:
-            logger.info("Downloading BGE embedding model once: %s", self._model_name)
-            if self._embedding_cache_dir:
-                self._embedding_cache_dir.mkdir(parents=True, exist_ok=True)
-            self._encoder = SentenceTransformer(
-                self._model_name,
-                cache_folder=str(self._embedding_cache_dir) if self._embedding_cache_dir else None,
-            )
-            if self._model_path:
-                self._model_path.parent.mkdir(parents=True, exist_ok=True)
-                self._encoder.save(str(self._model_path))
-                logger.info("Saved BGE embedding model to local storage")
-        embedding_dim = self._encoder.get_embedding_dimension()
+            if self._model_path and self._model_path.exists():
+                logger.info("Loading cached BGE embedding model from local storage")
+                self._encoder = SentenceTransformer(str(self._model_path))
+            else:
+                logger.info("Downloading BGE embedding model once: %s", self._model_name)
+                if self._embedding_cache_dir:
+                    self._embedding_cache_dir.mkdir(parents=True, exist_ok=True)
+                self._encoder = SentenceTransformer(
+                    self._model_name,
+                    cache_folder=str(self._embedding_cache_dir) if self._embedding_cache_dir else None,
+                )
+                if self._model_path:
+                    self._model_path.parent.mkdir(parents=True, exist_ok=True)
+                    self._encoder.save(str(self._model_path))
+                    logger.info("Saved BGE embedding model to local storage")
+            embedding_dim = self._encoder.get_embedding_dimension()
 
-        # Initialize Qdrant client
-        if self._qdrant_mode == "memory":
-            self._qdrant_client = QdrantClient(":memory:")
-            self._qdrant_client.recreate_collection(
-                collection_name=self.COLLECTION_NAME,
-                vectors_config=VectorParams(size=embedding_dim, distance=Distance.COSINE),
-            )
-            self._index_knowledge_base(PointStruct)
-        elif self._qdrant_mode == "disk":
-            db_path = self.config.get("qdrant_path", "data/qdrant_db")
-            Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-            self._qdrant_client = QdrantClient(path=str(db_path))
-            if not self._qdrant_client.collection_exists(self.COLLECTION_NAME):
-                self._qdrant_client.create_collection(
+            # Initialize Qdrant client
+            if self._qdrant_mode == "memory":
+                self._qdrant_client = QdrantClient(":memory:")
+                self._qdrant_client.recreate_collection(
                     collection_name=self.COLLECTION_NAME,
                     vectors_config=VectorParams(size=embedding_dim, distance=Distance.COSINE),
                 )
                 self._index_knowledge_base(PointStruct)
-        elif self._qdrant_mode == "docker":
-            host = self.config.get("qdrant_host", "localhost")
-            port = self.config.get("qdrant_port", 6333)
-            self._qdrant_client = QdrantClient(host=host, port=port)
-            self._qdrant_client.recreate_collection(
-                collection_name=self.COLLECTION_NAME,
-                vectors_config=VectorParams(size=embedding_dim, distance=Distance.COSINE),
-            )
-            self._index_knowledge_base(PointStruct)
-        else:
-            raise ValueError(f"Unsupported qdrant_mode: {self._qdrant_mode}")
+            elif self._qdrant_mode == "disk":
+                db_path = self.config.get("qdrant_path", "data/qdrant_db")
+                Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+                self._qdrant_client = QdrantClient(path=str(db_path))
+                if not self._qdrant_client.collection_exists(self.COLLECTION_NAME):
+                    self._qdrant_client.create_collection(
+                        collection_name=self.COLLECTION_NAME,
+                        vectors_config=VectorParams(size=embedding_dim, distance=Distance.COSINE),
+                    )
+                    self._index_knowledge_base(PointStruct)
+            elif self._qdrant_mode == "docker":
+                host = self.config.get("qdrant_host", "localhost")
+                port = self.config.get("qdrant_port", 6333)
+                self._qdrant_client = QdrantClient(host=host, port=port)
+                self._qdrant_client.recreate_collection(
+                    collection_name=self.COLLECTION_NAME,
+                    vectors_config=VectorParams(size=embedding_dim, distance=Distance.COSINE),
+                )
+                self._index_knowledge_base(PointStruct)
+            else:
+                raise ValueError(f"Unsupported qdrant_mode: {self._qdrant_mode}")
 
-        self._initialized = True
-        logger.info(f"Medical retrieval agent initialized ({self._qdrant_mode} mode)")
+            self._initialized = True
+            logger.info(f"Medical retrieval agent initialized ({self._qdrant_mode} mode)")
 
     def _index_knowledge_base(self, PointStruct):
         """Load knowledge base JSON and index into Qdrant."""

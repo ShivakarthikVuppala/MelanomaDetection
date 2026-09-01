@@ -353,6 +353,12 @@ class CoreDiagnosisEngine:
             )
 
         warnings = []
+        if raw.get("segmentation_recovery_used", False):
+            warnings.append(
+                "SegFormer produced a dominant dermoscope-field mask; an "
+                "image-based vignette recovery was used. Review the lesion "
+                "outline before relying on measurements."
+            )
         if scale_cal.method != "none" and not scale_cal.calibration_valid:
             warnings.append(f"Physical measurement unavailable: {scale_cal.validation_reason}")
 

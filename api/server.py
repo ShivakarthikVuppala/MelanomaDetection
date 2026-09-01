@@ -3,6 +3,7 @@
 import io
 import logging
 import os
+import threading
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -69,6 +70,7 @@ app.mount("/static/uploads", StaticFiles(directory=str(UPLOADS_DIR)), name="uplo
 
 analyses_store: Dict[str, AnalysisResponse] = {}
 _orchestrator_instance = None
+_orchestrator_init_lock = threading.Lock()
 
 
 def _config() -> dict:
@@ -114,9 +116,11 @@ def _models_available() -> bool:
 def _get_orchestrator():
     global _orchestrator_instance
     if _orchestrator_instance is None:
-        from src.orchestrator.agent import OrchestratorAgent
-        _orchestrator_instance = OrchestratorAgent(str(PROJECT_ROOT / "config.yaml"))
-        logger.info("Orchestrator initialized")
+        with _orchestrator_init_lock:
+            if _orchestrator_instance is None:
+                from src.orchestrator.agent import OrchestratorAgent
+                _orchestrator_instance = OrchestratorAgent(str(PROJECT_ROOT / "config.yaml"))
+                logger.info("Orchestrator initialized")
     return _orchestrator_instance
 
 

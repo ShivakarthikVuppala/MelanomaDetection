@@ -9,6 +9,7 @@ DiagnosisResult — that responsibility belongs to the Core Diagnosis Engine.
 """
 
 from concurrent.futures import ThreadPoolExecutor
+import threading
 from typing import Dict, Optional
 
 import numpy as np
@@ -54,14 +55,28 @@ class InferencePipeline:
         self.segmenter = segmenter
         self.feature_extractor = feature_extractor
         self.preprocessor = preprocessor
+        # The preprocessor and segmenter retain per-call state.  Protect those
+        # small critical sections so concurrent API requests cannot mix masks,
+        # probability maps, or hair-removed images between analyses.  The
+        # classifier remains concurrent, and preprocessing/classification can
+        # still overlap with other requests.
+        self._preprocess_lock = threading.Lock()
+        self._segment_lock = threading.Lock()
 
     def _classify(self, preprocessed: np.ndarray) -> dict:
         """Run classification on the preprocessed image."""
         return self.classifier.predict_array(preprocessed)
 
-    def _segment(self, preprocessed: np.ndarray) -> np.ndarray:
+    def _segment(self, preprocessed: np.ndarray) -> tuple[np.ndarray, np.ndarray | None, bool]:
         """Run SegFormer segmentation."""
-        return self.segmenter.segment(preprocessed)
+        with self._segment_lock:
+            mask = self.segmenter.segment(preprocessed)
+            # Snapshot state while holding the same lock as segment().
+            return (
+                mask,
+                getattr(self.segmenter, "last_probability_map", None),
+                bool(getattr(self.segmenter, "last_used_recovery", False)),
+            )
 
     def run(self, image_path: str) -> Dict:
         """
@@ -87,9 +102,10 @@ class InferencePipeline:
 
         # 0. Preprocessing (hair removal, illumination normalization)
         if self.preprocessor is not None:
-            preprocessed = self.preprocessor.process(image)
-            hair_removed = self.preprocessor.get_hair_removed_image(image)
-            preprocessing_applied = self.preprocessor.get_applied_steps()
+            with self._preprocess_lock:
+                preprocessed = self.preprocessor.process(image)
+                hair_removed = self.preprocessor.get_hair_removed_image(image).copy()
+                preprocessing_applied = self.preprocessor.get_applied_steps()
         else:
             preprocessed = image
             hair_removed = image
@@ -104,8 +120,7 @@ class InferencePipeline:
             seg_future = executor.submit(self._segment, preprocessed)
 
             cls_result = cls_future.result()
-        mask = seg_future.result()
-        probability_map = getattr(self.segmenter, "last_probability_map", None)
+        mask, probability_map, used_segmentation_recovery = seg_future.result()
 
         # 3. ABC Feature Extraction (sequential — needs the mask)
         features = self.feature_extractor.extract_all(preprocessed, mask)
@@ -115,6 +130,7 @@ class InferencePipeline:
             "classification": cls_result,
             "mask": mask,
             "probability_map": probability_map,
+            "segmentation_recovery_used": used_segmentation_recovery,
             "features": features,
             "preprocessed_image": preprocessed,
             "hair_removed_image": hair_removed,

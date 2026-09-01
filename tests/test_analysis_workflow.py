@@ -201,6 +201,21 @@ def test_full_frame_segmentation_is_rejected_before_measurement():
         refine_lesion_mask(np.ones((100, 100), dtype=np.uint8))
 
 
+def test_vignetted_segmentation_recovery_returns_bounded_interior_mask():
+    from src.segmentation.segformer_wrapper import SegFormerSegmenter
+
+    image = np.asarray(Image.open(
+        r"C:\Users\shiva\Downloads\ISIC_0024644_MEL.jpg"
+    ).convert("RGB"))
+    full_field = np.ones(image.shape[:2], dtype=np.uint8)
+
+    assert SegFormerSegmenter._is_dominant_border_mask(full_field)
+    recovered = SegFormerSegmenter._recover_vignetted_mask(image)
+    assert recovered is not None
+    assert 100 < int(recovered.sum()) < int(recovered.size * 0.75)
+    assert cv2.connectedComponents(recovered)[0] - 1 == 1
+
+
 def test_api_rejects_unsupported_format():
     from fastapi.testclient import TestClient
     from api.server import app

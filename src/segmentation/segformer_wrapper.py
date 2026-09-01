@@ -41,6 +41,7 @@ class SegFormerSegmenter:
         self.input_size = input_size
         self.closing_kernel = closing_kernel
         self.last_probability_map = None
+        self.last_used_recovery = False
 
         # Load SegFormer model
         self.model = smp.Segformer(
@@ -78,6 +79,7 @@ class SegFormerSegmenter:
             Binary mask as numpy array (H, W), uint8, values 0 or 1.
         """
         H, W = image.shape[:2]
+        self.last_used_recovery = False
 
         # 1. Preprocess image to input_size
         img_resized = sk_transform.resize(
@@ -123,4 +125,90 @@ class SegFormerSegmenter:
             )
             binary_mask = cv2.morphologyEx(binary_mask, cv2.MORPH_CLOSE, kernel)
 
+        # Dermatoscope images often have a black circular vignette.  On some
+        # low-contrast lesions the network mistakes the complete illuminated
+        # field for foreground.  Passing that mask downstream makes the
+        # border/background look like a lesion, so recover from this specific
+        # failure mode using an image-only, centre-biased mask.  The recovery
+        # is deliberately conservative and is only used for a dominant,
+        # border-touching prediction; ordinary model masks are unchanged.
+        if self._is_dominant_border_mask(binary_mask):
+            recovered = self._recover_vignetted_mask(image)
+            if recovered is not None:
+                binary_mask = recovered
+                self.last_used_recovery = True
+
         return binary_mask
+
+    @staticmethod
+    def _is_dominant_border_mask(mask: np.ndarray) -> bool:
+        """Return True for the common full dermoscope-field false positive."""
+        area_ratio = float(np.count_nonzero(mask)) / max(mask.size, 1)
+        if area_ratio < 0.75:
+            return False
+        height, width = mask.shape
+        border_width = max(1, int(round(min(height, width) * 0.015)))
+        border = np.concatenate((
+            mask[:border_width, :].ravel(), mask[-border_width:, :].ravel(),
+            mask[:, :border_width].ravel(), mask[:, -border_width:].ravel(),
+        ))
+        return float(np.mean(border > 0)) > 0.25
+
+    @staticmethod
+    def _recover_vignetted_mask(image: np.ndarray) -> np.ndarray | None:
+        """Estimate a bounded lesion mask when SegFormer captures the field.
+
+        This is a safety fallback, not a replacement segmentation model.  It
+        uses a circular field-of-view prior and robust darkness/chroma scores,
+        then keeps only an interior component near the image centre.  Returning
+        ``None`` leaves the normal engine validation in charge of rejecting the
+        image when no plausible lesion can be found.
+        """
+        if image.ndim != 3 or image.shape[2] != 3:
+            return None
+        height, width = image.shape[:2]
+        yy, xx = np.ogrid[:height, :width]
+        cx, cy = width / 2.0, height / 2.0
+        radius = min(height, width) * 0.46
+        field = ((xx - cx) ** 2 + (yy - cy) ** 2 <= radius ** 2)
+
+        gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY).astype(np.float32)
+        lab = cv2.cvtColor(image, cv2.COLOR_RGB2LAB).astype(np.float32)
+        pixels = np.column_stack((gray[field], lab[:, :, 1][field], lab[:, :, 2][field]))
+        centre = np.median(pixels, axis=0)
+        spread = np.maximum(np.percentile(pixels, 75, axis=0) - np.percentile(pixels, 25, axis=0), 1.0)
+        # Darkness is the strongest cue; chroma distance helps separate brown
+        # pigment from the pink skin background under uneven illumination.
+        score = ((centre[0] - gray) / spread[0])
+        score += 0.35 * np.abs(lab[:, :, 1] - centre[1]) / spread[1]
+        score += 0.35 * np.abs(lab[:, :, 2] - centre[2]) / spread[2]
+        score[~field] = -np.inf
+
+        cutoff = float(np.percentile(score[field], 72.0))
+        candidate = (score >= cutoff).astype(np.uint8)
+        candidate[~field] = 0
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
+        candidate = cv2.morphologyEx(candidate, cv2.MORPH_OPEN, kernel)
+        candidate = cv2.morphologyEx(candidate, cv2.MORPH_CLOSE, kernel, iterations=2)
+
+        count, labels, stats, centroids = cv2.connectedComponentsWithStats(candidate, 8)
+        if count <= 1:
+            return None
+        candidates = []
+        for component in range(1, count):
+            x, y, w, h, area = stats[component]
+            if area < max(100, int(height * width * 0.002)):
+                continue
+            if x <= 0 or y <= 0 or x + w >= width or y + h >= height:
+                continue
+            distance = np.hypot(centroids[component][0] - cx, centroids[component][1] - cy)
+            centrality = 1.0 - min(distance / max(radius, 1.0), 1.0)
+            candidates.append((float(area) * (0.55 + 0.45 * centrality), component))
+        if not candidates:
+            return None
+        _, selected = max(candidates, key=lambda item: item[0])
+        recovered = (labels == selected).astype(np.uint8)
+        ratio = float(recovered.sum()) / max(height * width, 1)
+        if ratio < 0.002 or ratio > 0.75:
+            return None
+        return recovered
