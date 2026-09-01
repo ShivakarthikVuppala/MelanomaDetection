@@ -7,14 +7,14 @@ export default function AdminDashboard({ onNavigate }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetch('/api/admin/users', {
-      headers: { Authorization: `Bearer ${token}` }
-    })
-      .then(res => {
+    Promise.all([
+      fetch('/api/admin/users', { headers: { Authorization: `Bearer ${token}` } }).then(res => {
         if (!res.ok) throw new Error('Failed to fetch users');
         return res.json();
-      })
-      .then(users => {
+      }),
+      fetch('/api/health').then(res => res.json())
+    ])
+      .then(([users, healthData]) => {
         const now = new Date();
         const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
         
@@ -24,6 +24,7 @@ export default function AdminDashboard({ onNavigate }) {
           total: users.length,
           new: newUsers,
           active: users.length, // Rough proxy for now
+          analysesCount: healthData.analyses_count || 0,
           error: null
         });
       })
@@ -57,6 +58,12 @@ export default function AdminDashboard({ onNavigate }) {
           <div className="metric-title" style={{ fontSize: '14px', color: 'var(--text-secondary)', marginBottom: '8px' }}>Active Users</div>
           <div className="metric-value" style={{ fontSize: '32px', fontWeight: '800', color: 'var(--text-primary)' }}>
             {loading ? '...' : stats.active}
+          </div>
+        </div>
+        <div className="metric-card" style={{ background: 'var(--bg-card)', padding: '24px', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border)' }}>
+          <div className="metric-title" style={{ fontSize: '14px', color: 'var(--text-secondary)', marginBottom: '8px' }}>Total Analyses</div>
+          <div className="metric-value" style={{ fontSize: '32px', fontWeight: '800', color: 'var(--text-primary)' }}>
+            {loading ? '...' : stats.analysesCount}
           </div>
         </div>
       </div>
