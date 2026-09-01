@@ -56,6 +56,11 @@ app = FastAPI(
     version="1.0.0",
     description="AI-assisted melanoma image analysis workflow",
 )
+
+@app.on_event("startup")
+async def startup_event():
+    from .auth import seed_admin
+    await seed_admin()
 cors_origins = [origin.strip() for origin in os.getenv(
     "CORS_ORIGINS",
     "http://localhost:5173,http://localhost:3000,http://127.0.0.1:5173",

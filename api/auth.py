@@ -2,12 +2,11 @@
 Authentication API
 ===================
 
-User registration, login, and profile management with SQLite + bcrypt + JWT.
+User registration, login, and profile management with MongoDB + bcrypt + JWT.
 """
 
 import os
 import re
-import sqlite3
 import secrets
 import logging
 import smtplib
@@ -18,6 +17,9 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Header
 from pydantic import BaseModel, Field
+from bson.objectid import ObjectId
+
+from .db import get_db
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +27,6 @@ logger = logging.getLogger(__name__)
 # Configuration
 # ---------------------------------------------------------------------------
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-DB_PATH = PROJECT_ROOT / "data" / "users.db"
 AUTH_SECRET_KEY = os.getenv("AUTH_SECRET_KEY", secrets.token_hex(32))
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRY_HOURS = 24
@@ -66,82 +67,41 @@ def _verify_password(password: str, hashed: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Database helpers
+# Database initialization
 # ---------------------------------------------------------------------------
-def _ensure_db():
-    """Create the users table if it doesn't exist."""
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(DB_PATH))
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            first_name  TEXT    NOT NULL,
-            last_name   TEXT    NOT NULL,
-            phone       TEXT    NOT NULL,
-            email       TEXT    NOT NULL UNIQUE,
-            password_hash TEXT  NOT NULL,
-            created_at  TEXT    NOT NULL,
-            role        TEXT    NOT NULL DEFAULT 'user'
-        )
-    """)
-    # Migration: Add role column if it doesn't exist
-    try:
-        conn.execute("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user'")
-    except sqlite3.OperationalError:
-        pass  # Column already exists
-        
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS pending_registrations (
-            email         TEXT    PRIMARY KEY,
-            first_name    TEXT    NOT NULL,
-            last_name     TEXT    NOT NULL,
-            phone         TEXT    NOT NULL,
-            password_hash TEXT    NOT NULL,
-            otp_hash      TEXT    NOT NULL,
-            expires_at    TEXT    NOT NULL,
-            attempts      INTEGER DEFAULT 0
-        )
-    """)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS rate_limits (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            action      TEXT    NOT NULL,
-            identifier  TEXT    NOT NULL,
-            timestamp   TEXT    NOT NULL
-        )
-    """)
-    conn.commit()
-
-    # Seed Admin User
+async def seed_admin():
+    """Seed the Admin User in MongoDB on startup."""
     admin_email = os.getenv("ADMIN_EMAIL")
     admin_pass = os.getenv("ADMIN_INITIAL_PASSWORD")
-    if admin_email and admin_pass:
-        existing_admin = conn.execute("SELECT id FROM users WHERE email = ?", (admin_email,)).fetchone()
-        if not existing_admin:
-            now = datetime.now(timezone.utc).isoformat()
-            p_hash = _hash_password(admin_pass)
-            conn.execute(
-                """INSERT INTO users (first_name, last_name, phone, email, password_hash, created_at, role)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                ("System", "Administrator", "", admin_email, p_hash, now, "admin"),
+    if not admin_email or not admin_pass:
+        return
+
+    db = get_db()
+    if db is None:
+        return
+
+    existing_admin = await db["users"].find_one({"email": admin_email})
+    if not existing_admin:
+        now = datetime.now(timezone.utc).isoformat()
+        p_hash = _hash_password(admin_pass)
+        await db["users"].insert_one({
+            "first_name": "System",
+            "last_name": "Administrator",
+            "phone": "",
+            "email": admin_email,
+            "password_hash": p_hash,
+            "created_at": now,
+            "role": "admin"
+        })
+        logger.info(f"Initialized Admin user with email: {admin_email}")
+    else:
+        # Ensure it has admin role
+        if existing_admin.get("role") != "admin":
+            await db["users"].update_one(
+                {"email": admin_email},
+                {"$set": {"role": "admin"}}
             )
-            logger.info(f"Initialized Admin user with email: {admin_email}")
-        else:
-            # Ensure it has admin role
-            conn.execute("UPDATE users SET role = 'admin' WHERE email = ?", (admin_email,))
-            
-    conn.commit()
-    conn.close()
 
-
-def _get_conn() -> sqlite3.Connection:
-    conn = sqlite3.connect(str(DB_PATH))
-    conn.row_factory = sqlite3.Row
-    return conn
-
-
-# Ensure DB on module import
-_ensure_db()
 
 # ---------------------------------------------------------------------------
 # Schemas
@@ -177,7 +137,7 @@ class ProfileUpdateRequest(BaseModel):
 
 
 class UserOut(BaseModel):
-    id: int
+    id: str
     first_name: str
     last_name: str
     phone: str
@@ -195,7 +155,7 @@ class AuthResponse(BaseModel):
 # Token helpers
 # ---------------------------------------------------------------------------
 
-def _create_token(user_id: int, email: str) -> str:
+def _create_token(user_id: str, email: str) -> str:
     jose = _get_jose()
     from jose import jwt as jose_jwt
     payload = {
@@ -219,25 +179,32 @@ def _decode_token(token: str) -> dict:
 # Auth dependency
 # ---------------------------------------------------------------------------
 
-def get_current_user(authorization: str = Header(...)) -> dict:
+async def get_current_user(authorization: str = Header(...)) -> dict:
     """Extract and validate the current user from the Authorization header."""
     if not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Invalid authorization header.")
     token = authorization[7:]
     payload = _decode_token(token)
-    user_id = int(payload["sub"])
+    user_id = payload["sub"]
 
-    conn = _get_conn()
-    row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
-    conn.close()
+    db = get_db()
+    if db is None:
+        raise HTTPException(status_code=500, detail="Database unavailable.")
 
-    if row is None:
+    try:
+        obj_id = ObjectId(user_id)
+    except Exception:
+        raise HTTPException(status_code=401, detail="Invalid user ID format.")
+
+    user = await db["users"].find_one({"_id": obj_id})
+    if user is None:
         raise HTTPException(status_code=401, detail="User not found.")
 
-    return dict(row)
+    user["id"] = str(user["_id"])
+    return user
 
 
-def get_admin_user(current_user: dict = Depends(get_current_user)) -> dict:
+async def get_admin_user(current_user: dict = Depends(get_current_user)) -> dict:
     """Ensure the current user has the admin role."""
     if current_user.get("role") != "admin":
         raise HTTPException(status_code=403, detail="Forbidden: Admin access required.")
@@ -295,22 +262,24 @@ def _send_otp_email(email: str, first_name: str, otp: str):
         logger.error(f"Failed to send email to {email}: {e}")
 
 
-def _check_rate_limit(conn, action: str, identifier: str, limit: int, window_minutes: int) -> bool:
+async def _check_rate_limit(db, action: str, identifier: str, limit: int, window_minutes: int) -> bool:
     cutoff = (datetime.now(timezone.utc) - timedelta(minutes=window_minutes)).isoformat()
-    conn.execute("DELETE FROM rate_limits WHERE timestamp < ?", (cutoff,))
+    await db["rate_limits"].delete_many({"timestamp": {"$lt": cutoff}})
     
-    count = conn.execute(
-        "SELECT COUNT(*) FROM rate_limits WHERE action = ? AND identifier = ? AND timestamp >= ?",
-        (action, identifier, cutoff)
-    ).fetchone()[0]
+    count = await db["rate_limits"].count_documents({
+        "action": action, 
+        "identifier": identifier, 
+        "timestamp": {"$gte": cutoff}
+    })
     
     if count >= limit:
         return False
         
-    conn.execute(
-        "INSERT INTO rate_limits (action, identifier, timestamp) VALUES (?, ?, ?)",
-        (action, identifier, datetime.now(timezone.utc).isoformat())
-    )
+    await db["rate_limits"].insert_one({
+        "action": action,
+        "identifier": identifier,
+        "timestamp": datetime.now(timezone.utc).isoformat()
+    })
     return True
 
 
@@ -321,18 +290,21 @@ router = APIRouter(prefix="/api/auth")
 
 
 @router.post("/signup")
-def signup(body: SignupRequest):
+async def signup(body: SignupRequest):
     """Register a new user account (creates pending registration)."""
     email = _validate_email(body.email)
     phone = _validate_phone(body.phone)
 
-    conn = _get_conn()
+    db = get_db()
+    if db is None:
+        raise HTTPException(status_code=503, detail="Database unavailable.")
+
     try:
-        if not _check_rate_limit(conn, "signup", email, 5, 60):
+        if not await _check_rate_limit(db, "signup", email, 5, 60):
             raise HTTPException(status_code=429, detail="Too many signup requests. Please try again later.")
 
         # Check for duplicate email in users
-        existing = conn.execute("SELECT id FROM users WHERE email = ?", (email,)).fetchone()
+        existing = await db["users"].find_one({"email": email})
         if existing:
             raise HTTPException(
                 status_code=409,
@@ -344,20 +316,19 @@ def signup(body: SignupRequest):
         otp_hash = _hash_password(otp)
         expires_at = (datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat()
         
-        conn.execute("""
-            INSERT INTO pending_registrations (email, first_name, last_name, phone, password_hash, otp_hash, expires_at, attempts)
-            VALUES (?, ?, ?, ?, ?, ?, ?, 0)
-            ON CONFLICT(email) DO UPDATE SET
-                first_name=excluded.first_name,
-                last_name=excluded.last_name,
-                phone=excluded.phone,
-                password_hash=excluded.password_hash,
-                otp_hash=excluded.otp_hash,
-                expires_at=excluded.expires_at,
-                attempts=0
-        """, (email, body.first_name.strip(), body.last_name.strip(), phone, password_hash, otp_hash, expires_at))
-        
-        conn.commit()
+        await db["pending_registrations"].update_one(
+            {"email": email},
+            {"$set": {
+                "first_name": body.first_name.strip(),
+                "last_name": body.last_name.strip(),
+                "phone": phone,
+                "password_hash": password_hash,
+                "otp_hash": otp_hash,
+                "expires_at": expires_at,
+                "attempts": 0
+            }},
+            upsert=True
+        )
         
         import threading
         threading.Thread(target=_send_otp_email, args=(email, body.first_name.strip(), otp)).start()
@@ -367,69 +338,73 @@ def signup(body: SignupRequest):
     except Exception:
         logger.exception("Signup DB error")
         raise HTTPException(status_code=500, detail="Account creation failed. Please try again.")
-    finally:
-        conn.close()
 
     return {"message": "OTP sent to email.", "email": email}
 
 
 @router.post("/verify-email")
-def verify_email(body: VerifyEmailRequest):
+async def verify_email(body: VerifyEmailRequest):
     """Validate OTP and create user."""
     email = body.email.strip().lower()
     
-    conn = _get_conn()
+    db = get_db()
+    if db is None:
+        raise HTTPException(status_code=503, detail="Database unavailable.")
+
     try:
-        if not _check_rate_limit(conn, "verify_otp", email, 5, 10):
+        if not await _check_rate_limit(db, "verify_otp", email, 5, 10):
             raise HTTPException(status_code=429, detail="Too many verification attempts.")
             
-        pending = conn.execute("SELECT * FROM pending_registrations WHERE email = ?", (email,)).fetchone()
+        pending = await db["pending_registrations"].find_one({"email": email})
         if not pending:
             raise HTTPException(status_code=400, detail="No pending registration found for this email.")
             
         if datetime.fromisoformat(pending["expires_at"]) < datetime.now(timezone.utc):
             raise HTTPException(status_code=400, detail="This verification code has expired.")
             
-        if pending["attempts"] >= 5:
-            conn.execute("DELETE FROM pending_registrations WHERE email = ?", (email,))
-            conn.commit()
+        if pending.get("attempts", 0) >= 5:
+            await db["pending_registrations"].delete_one({"email": email})
             raise HTTPException(status_code=400, detail="Too many failed attempts. Please sign up again.")
             
         if not _verify_password(body.otp, pending["otp_hash"]):
-            conn.execute("UPDATE pending_registrations SET attempts = attempts + 1 WHERE email = ?", (email,))
-            conn.commit()
+            await db["pending_registrations"].update_one(
+                {"email": email},
+                {"$inc": {"attempts": 1}}
+            )
             raise HTTPException(status_code=400, detail="Invalid verification code.")
             
         now = datetime.now(timezone.utc).isoformat()
-        cursor = conn.execute(
-            """INSERT INTO users (first_name, last_name, phone, email, password_hash, created_at, role)
-               VALUES (?, ?, ?, ?, ?, ?, 'user')""",
-            (pending["first_name"], pending["last_name"], pending["phone"], email, pending["password_hash"], now),
-        )
-        conn.execute("DELETE FROM pending_registrations WHERE email = ?", (email,))
-        conn.commit()
-        
-        user_id = cursor.lastrowid
+        result = await db["users"].insert_one({
+            "first_name": pending["first_name"],
+            "last_name": pending["last_name"],
+            "phone": pending["phone"],
+            "email": email,
+            "password_hash": pending["password_hash"],
+            "created_at": now,
+            "role": "user"
+        })
+        await db["pending_registrations"].delete_one({"email": email})
         
     except HTTPException:
         raise
-    finally:
-        conn.close()
         
     return {"message": "Email verified and account created."}
 
 
 @router.post("/resend-otp")
-def resend_otp(body: ResendOtpRequest):
+async def resend_otp(body: ResendOtpRequest):
     """Resend a new OTP to a pending registration."""
     email = body.email.strip().lower()
     
-    conn = _get_conn()
+    db = get_db()
+    if db is None:
+        raise HTTPException(status_code=503, detail="Database unavailable.")
+
     try:
-        if not _check_rate_limit(conn, "send_otp", email, 3, 15):
+        if not await _check_rate_limit(db, "send_otp", email, 3, 15):
             raise HTTPException(status_code=429, detail="Too many verification requests. Please try again later.")
             
-        pending = conn.execute("SELECT first_name FROM pending_registrations WHERE email = ?", (email,)).fetchone()
+        pending = await db["pending_registrations"].find_one({"email": email})
         if not pending:
             raise HTTPException(status_code=400, detail="No pending registration found.")
             
@@ -437,54 +412,57 @@ def resend_otp(body: ResendOtpRequest):
         otp_hash = _hash_password(otp)
         expires_at = (datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat()
         
-        conn.execute(
-            "UPDATE pending_registrations SET otp_hash = ?, expires_at = ?, attempts = 0 WHERE email = ?",
-            (otp_hash, expires_at, email)
+        await db["pending_registrations"].update_one(
+            {"email": email},
+            {"$set": {
+                "otp_hash": otp_hash,
+                "expires_at": expires_at,
+                "attempts": 0
+            }}
         )
-        conn.commit()
         
         import threading
         threading.Thread(target=_send_otp_email, args=(email, pending["first_name"], otp)).start()
         
     except HTTPException:
         raise
-    finally:
-        conn.close()
         
     return {"message": "A new verification code has been sent."}
 
 
 @router.post("/login", response_model=AuthResponse)
-def login(body: LoginRequest):
+async def login(body: LoginRequest):
     """Authenticate and return a JWT token."""
     email = body.email.strip().lower()
 
-    conn = _get_conn()
-    row = conn.execute("SELECT * FROM users WHERE email = ?", (email,)).fetchone()
-    conn.close()
+    db = get_db()
+    if db is None:
+        raise HTTPException(status_code=503, detail="Database unavailable.")
 
-    if row is None or not _verify_password(body.password, row["password_hash"]):
+    user = await db["users"].find_one({"email": email})
+    
+    if user is None or not _verify_password(body.password, user["password_hash"]):
         raise HTTPException(status_code=401, detail="Invalid email or password.")
 
-    user = dict(row)
-    token = _create_token(user["id"], user["email"])
+    user_id_str = str(user["_id"])
+    token = _create_token(user_id_str, user["email"])
 
     return AuthResponse(
         token=token,
         user=UserOut(
-            id=user["id"],
+            id=user_id_str,
             first_name=user["first_name"],
             last_name=user["last_name"],
             phone=user["phone"],
             email=user["email"],
             created_at=user["created_at"],
-            role=user["role"],
+            role=user.get("role", "user"),
         ),
     )
 
 
 @router.get("/me", response_model=UserOut)
-def get_me(current_user: dict = Depends(get_current_user)):
+async def get_me(current_user: dict = Depends(get_current_user)):
     """Return the authenticated user's profile."""
     return UserOut(
         id=current_user["id"],
@@ -493,12 +471,12 @@ def get_me(current_user: dict = Depends(get_current_user)):
         phone=current_user["phone"],
         email=current_user["email"],
         created_at=current_user["created_at"],
-        role=current_user["role"],
+        role=current_user.get("role", "user"),
     )
 
 
 @router.put("/me", response_model=UserOut)
-def update_me(body: ProfileUpdateRequest, current_user: dict = Depends(get_current_user)):
+async def update_me(body: ProfileUpdateRequest, current_user: dict = Depends(get_current_user)):
     """Update the authenticated user's profile."""
     updates = {}
     if body.first_name is not None:
@@ -516,15 +494,17 @@ def update_me(body: ProfileUpdateRequest, current_user: dict = Depends(get_curre
     if body.phone is not None:
         updates["phone"] = _validate_phone(body.phone)
 
+    db = get_db()
+    if db is None:
+        raise HTTPException(status_code=503, detail="Database unavailable.")
+
     if body.email is not None:
         new_email = _validate_email(body.email)
         if new_email != current_user["email"]:
-            conn = _get_conn()
-            existing = conn.execute(
-                "SELECT id FROM users WHERE email = ? AND id != ?",
-                (new_email, current_user["id"]),
-            ).fetchone()
-            conn.close()
+            existing = await db["users"].find_one({
+                "email": new_email,
+                "_id": {"$ne": ObjectId(current_user["id"])}
+            })
             if existing:
                 raise HTTPException(
                     status_code=409,
@@ -535,22 +515,19 @@ def update_me(body: ProfileUpdateRequest, current_user: dict = Depends(get_curre
     if not updates:
         raise HTTPException(status_code=422, detail="No fields to update.")
 
-    set_clause = ", ".join(f"{k} = ?" for k in updates)
-    values = list(updates.values()) + [current_user["id"]]
+    await db["users"].update_one(
+        {"_id": ObjectId(current_user["id"])},
+        {"$set": updates}
+    )
 
-    conn = _get_conn()
-    conn.execute(f"UPDATE users SET {set_clause} WHERE id = ?", values)
-    conn.commit()
-
-    row = conn.execute("SELECT * FROM users WHERE id = ?", (current_user["id"],)).fetchone()
-    conn.close()
+    row = await db["users"].find_one({"_id": ObjectId(current_user["id"])})
 
     return UserOut(
-        id=row["id"],
+        id=str(row["_id"]),
         first_name=row["first_name"],
         last_name=row["last_name"],
         phone=row["phone"],
         email=row["email"],
         created_at=row["created_at"],
-        role=row["role"],
+        role=row.get("role", "user"),
     )
