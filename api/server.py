@@ -75,6 +75,7 @@ app.mount("/static/uploads", StaticFiles(directory=str(UPLOADS_DIR)), name="uplo
 analyses_store: Dict[str, AnalysisResponse] = {}
 _orchestrator_instance = None
 _orchestrator_init_lock = threading.Lock()
+from .db import get_db, ping_db
 
 
 def _config() -> dict:
@@ -314,17 +315,47 @@ def root():
 
 
 @app.get("/api/health")
-def health():
+async def health():
+    db = get_db()
+    mongo_status = await ping_db() if db is not None else False
+    count = len(analyses_store)
+    if mongo_status:
+        try:
+            count = await db["analyses"].count_documents({})
+        except Exception:
+            pass
     return {
         "status": "healthy",
         "models_loaded": _models_available(),
-        "analyses_count": len(analyses_store),
+        "mongodb_connected": mongo_status,
+        "analyses_count": count,
     }
 
 
 @app.get("/api/analyses", response_model=list[AnalysisListItem])
-def list_analyses():
+async def list_analyses():
+    db = get_db()
     items = []
+    if db is not None:
+        try:
+            cursor = db["analyses"].find({"diagnosis": {"$exists": True}}).sort("diagnosis.metadata.timestamp", -1)
+            async for doc in cursor:
+                try:
+                    items.append(AnalysisListItem(
+                        analysis_id=doc["analysis_id"],
+                        image_name=doc.get("diagnosis", {}).get("metadata", {}).get("image_id") or doc["analysis_id"],
+                        prediction=doc.get("diagnosis", {}).get("diagnosis", {}).get("prediction", "Unknown"),
+                        confidence=doc.get("diagnosis", {}).get("diagnosis", {}).get("confidence", 0.0),
+                        timestamp=doc.get("diagnosis", {}).get("metadata", {}).get("timestamp", datetime.now()),
+                        status=doc.get("status", "completed"),
+                    ))
+                except Exception as e:
+                    logger.warning(f"Skipping document {doc.get('analysis_id')} due to parse error: {e}")
+            return items
+        except Exception as e:
+            logger.error(f"MongoDB error in list_analyses: {e}")
+            # Fall back to in-memory store
+            
     for analysis in analyses_store.values():
         if analysis.diagnosis:
             items.append(AnalysisListItem(
@@ -339,7 +370,16 @@ def list_analyses():
 
 
 @app.get("/api/analyses/{analysis_id}", response_model=AnalysisResponse)
-def get_analysis(analysis_id: str):
+async def get_analysis(analysis_id: str):
+    db = get_db()
+    if db is not None:
+        try:
+            doc = await db["analyses"].find_one({"analysis_id": analysis_id})
+            if doc:
+                return AnalysisResponse(**doc)
+        except Exception as e:
+            logger.error(f"MongoDB error in get_analysis: {e}")
+            
     analysis = analyses_store.get(analysis_id)
     if analysis is None:
         raise HTTPException(status_code=404, detail={
@@ -411,6 +451,19 @@ async def preprocess_image(file: UploadFile = File(...)):
     )
 
 
+async def _save_analysis(analysis: AnalysisResponse):
+    analyses_store[analysis.analysis_id] = analysis
+    db = get_db()
+    if db is not None:
+        try:
+            await db["analyses"].update_one(
+                {"analysis_id": analysis.analysis_id},
+                {"$set": analysis.model_dump(mode='json')},
+                upsert=True
+            )
+        except Exception as e:
+            logger.error(f"Failed to save analysis {analysis.analysis_id} to MongoDB: {e}")
+
 @app.post("/api/analyze", response_model=AnalysisResponse)
 async def analyze_image(
     file: UploadFile = File(...),
@@ -468,7 +521,7 @@ async def analyze_image(
             retryable=True,
             flags=quality.warnings,
         )
-        analyses_store[analysis_id] = analysis
+        await _save_analysis(analysis)
         return analysis
 
     if not _models_available():
@@ -508,5 +561,5 @@ async def analyze_image(
             retryable=True,
         )
 
-    analyses_store[analysis_id] = analysis
+    await _save_analysis(analysis)
     return analysis
