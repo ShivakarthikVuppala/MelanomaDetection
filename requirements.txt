@@ -44,5 +44,9 @@ fastapi>=0.115.0
 uvicorn[standard]>=0.30.0
 python-multipart>=0.0.9
 
+# Authentication
+bcrypt>=4.0.0
+python-jose[cryptography]>=3.3.0
+
 # Phase 3 — LLM Explainability (Gemini)
 google-genai>=1.0.0

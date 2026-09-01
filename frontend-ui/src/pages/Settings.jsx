@@ -1,8 +1,10 @@
 import { useState, useEffect } from 'react';
 import { useToast } from '../components/Toast';
+import { useAuth } from '../components/AuthContext';
 
-export default function Settings() {
+export default function Settings({ onNavigate }) {
   const showToast = useToast();
+  const { user } = useAuth();
   
   // Initialize theme from localStorage or system preference
   const [isDarkMode, setIsDarkMode] = useState(() => {
@@ -36,6 +38,33 @@ export default function Settings() {
 
       <div className="settings-layout">
         <div className="settings-form" style={{ maxWidth: '600px' }}>
+          {/* Account Section */}
+          <div className="result-card" style={{ marginBottom: '24px' }}>
+            <h3 style={{ fontSize: '18px', fontWeight: '700', marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <i className="fas fa-user-circle" style={{ color: 'var(--primary)' }}></i> Account
+            </h3>
+            {user && (
+              <div className="settings-account-info">
+                <div className="settings-account-row">
+                  <span className="settings-account-label">Name</span>
+                  <span className="settings-account-value">{user.first_name} {user.last_name}</span>
+                </div>
+                <div className="settings-account-row">
+                  <span className="settings-account-label">Email</span>
+                  <span className="settings-account-value">{user.email}</span>
+                </div>
+                <div className="settings-account-row">
+                  <span className="settings-account-label">Phone</span>
+                  <span className="settings-account-value">{user.phone}</span>
+                </div>
+              </div>
+            )}
+            <p style={{ fontSize: '13px', color: 'var(--text-muted)', marginTop: '16px' }}>
+              To edit your profile information, visit the <strong>Profile</strong> page.
+            </p>
+          </div>
+
+          {/* Appearance Section */}
           <div className="result-card" style={{ marginBottom: '24px' }}>
             <h3 style={{ fontSize: '18px', fontWeight: '700', marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
               <i className="fas fa-palette" style={{ color: 'var(--primary)' }}></i> Appearance
