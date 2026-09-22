@@ -78,7 +78,13 @@ def generate_standard_queries(
 
     # E — Evolution
     evolution_data = metrics.get("evolution", {})
-    if isinstance(evolution_data, dict) and evolution_data.get("reported_change"):
+    has_longitudinal_comparison = (
+        isinstance(evolution_data, dict)
+        and evolution_data.get("status") == "longitudinal_image_comparison"
+    )
+    if has_longitudinal_comparison or (
+        isinstance(evolution_data, dict) and evolution_data.get("reported_change")
+    ):
         queries.append(
             "diagnostic importance of lesion evolution change in "
             "size shape color or symptoms in melanoma"
@@ -189,7 +195,19 @@ def generate_hyde_queries(
     # E — Evolution
     evolution = metrics.get("evolution", {})
     if isinstance(evolution, dict):
-        if evolution.get("reported_change"):
+        comparison = evolution.get("comparison", {})
+        if evolution.get("status") == "longitudinal_image_comparison" and isinstance(comparison, dict):
+            hyde_configs.append({
+                "criterion": "evolution (longitudinal image comparison)",
+                "description": (
+                    f"Baseline and follow-up lesion images compared over {comparison.get('interval_days', 'unknown')} days. "
+                    f"Relative area change: {comparison.get('area_change_percent', 'unavailable')}%. "
+                    f"Relative diameter change: {comparison.get('diameter_change_percent', 'unavailable')}%. "
+                    f"Normalized shape overlap: {comparison.get('normalized_shape_overlap', 'unavailable')}. "
+                    "These are image-derived decision-support measurements, not diagnostic thresholds."
+                )
+            })
+        elif evolution.get("reported_change"):
             changes = evolution.get("change_types", [])
             timeframe = evolution.get("timeframe_months", "unknown")
             symptoms = evolution.get("symptoms", [])

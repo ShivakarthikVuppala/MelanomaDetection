@@ -18,7 +18,7 @@ class MelanomaPipeline:
         print("Melanoma pipeline initialized.")
 
 
-    def analyze(self, image_path):
+    def analyze(self, image_path, evolution_history=None, return_segmentation=False):
 
         print("\n" + "=" * 70)
         print("MELANOMA IMAGE ANALYSIS PIPELINE")
@@ -50,7 +50,8 @@ class MelanomaPipeline:
         features = self.feature_extractor.extract(
             image,
             mask,
-            contour
+            contour,
+            evolution_history=evolution_history
         )
 
         print("ABCD features:")
@@ -93,6 +94,11 @@ class MelanomaPipeline:
 
             "image_path": image_path
         }
+
+        # This is intended only for trusted backend callers such as the
+        # longitudinal comparator. Do not serialize NumPy arrays in API output.
+        if return_segmentation:
+            result["_segmentation"] = segmentation_result
 
         print("\n" + "=" * 70)
         print("PIPELINE COMPLETED")

@@ -21,11 +21,12 @@ import os
 import uuid
 import asyncio
 import logging
+from datetime import date
 from io import BytesIO
 from typing import Dict, Any, Optional, List
 from PIL import Image
 
-from fastapi import FastAPI, HTTPException, UploadFile, File, Request, status, Depends
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Request, status, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
@@ -34,6 +35,7 @@ from config import settings
 from agent import create_agent, sanitize_user_input
 from model_pipeline.pipeline import MelanomaPipeline
 from observability import global_metrics
+from evolution_comparator import EvolutionComparator
 
 
 # ============================================================
@@ -59,6 +61,49 @@ ALLOWED_MIME_TYPES = {
     "image/bmp",
     "image/x-ms-bmp"
 }
+
+
+async def save_validated_upload(upload: UploadFile, label: str) -> str:
+    """Validate and store one transient image upload for backend processing."""
+    filename = sanitize_user_input(upload.filename or f"{label}.jpg", max_length=128)
+    _, extension = os.path.splitext(filename.lower())
+    if extension not in ALLOWED_EXTENSIONS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid {label} format '{extension}'. Allowed extensions: {', '.join(sorted(ALLOWED_EXTENSIONS))}",
+        )
+
+    content_type = (upload.content_type or "").lower()
+    if content_type not in ALLOWED_MIME_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unsupported {label} media type '{content_type}'.",
+        )
+
+    content = await upload.read()
+    if not content:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"{label} is empty.")
+    if len(content) > settings.MAX_FILE_SIZE_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"{label} exceeds the {settings.MAX_FILE_SIZE_BYTES // (1024 * 1024)} MB limit.",
+        )
+
+    try:
+        with Image.open(BytesIO(content)) as image:
+            image.verify()
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"{label} is corrupt or is not a valid image.",
+        ) from exc
+
+    temp_dir = "./temp_uploads"
+    os.makedirs(temp_dir, exist_ok=True)
+    path = os.path.join(temp_dir, f"{label}_{uuid.uuid4().hex}{extension}")
+    with open(path, "wb") as temp_file:
+        temp_file.write(content)
+    return path
 
 
 # ============================================================
@@ -379,6 +424,132 @@ async def analyze_case_stream(case: CaseInput, request: Request):
             return agent.generate_report(case_dict)
         report = await asyncio.to_thread(_generate)
         return report
+
+
+# ============================================================
+# Evolution Comparison Endpoint (two image visits — Async)
+# ============================================================
+
+@app.post("/compare-evolution", dependencies=[Depends(verify_api_key)])
+@limiter.limit(settings.RATE_LIMIT)
+async def compare_evolution(
+    request: Request,
+    baseline_image: UploadFile = File(...),
+    followup_image: UploadFile = File(...),
+    baseline_date: str = Form(...),
+    followup_date: str = Form(...),
+    same_lesion_confirmed: bool = Form(...),
+    lesion_site: Optional[str] = Form(None),
+    reported_changes: Optional[List[str]] = Form(None),
+    reported_symptoms: Optional[List[str]] = Form(None),
+    prior_history_consent: bool = Form(False),
+    self_reported_prior_history: Optional[str] = Form(None),
+):
+    """Compare two visits of the same lesion and generate an ABCDE RAG report.
+
+    The endpoint does not persist patient records. The caller explicitly
+    confirms that both uploads depict the same lesion. Values are relative
+    unless a future capture workflow supplies a shared physical scale.
+    """
+    temp_paths: list[str] = []
+    try:
+        try:
+            parsed_baseline_date = date.fromisoformat(baseline_date)
+            parsed_followup_date = date.fromisoformat(followup_date)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="baseline_date and followup_date must use YYYY-MM-DD format.",
+            ) from exc
+        if parsed_followup_date <= parsed_baseline_date:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="followup_date must be later than baseline_date.",
+            )
+        if not same_lesion_confirmed:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Evolution comparison requires confirmation that both images show the same lesion.",
+            )
+        if self_reported_prior_history and not prior_history_consent:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="prior_history_consent must be true before self-reported prior history is included.",
+            )
+
+        clean_lesion_site = sanitize_user_input(lesion_site, max_length=100) if lesion_site else None
+        clean_prior_history = (
+            sanitize_user_input(self_reported_prior_history, max_length=500)
+            if self_reported_prior_history else None
+        )
+
+        baseline_path = await save_validated_upload(baseline_image, "baseline")
+        temp_paths.append(baseline_path)
+        followup_path = await save_validated_upload(followup_image, "followup")
+        temp_paths.append(followup_path)
+
+        # Both visit analyses run under the same API request. The shared
+        # pipeline is read-only during inference, so neither visit changes the
+        # other visit's inputs or results.
+        baseline, followup = await asyncio.gather(
+            asyncio.to_thread(pipeline.analyze, baseline_path, return_segmentation=True),
+            asyncio.to_thread(pipeline.analyze, followup_path, return_segmentation=True),
+        )
+        baseline_segmentation = baseline.pop("_segmentation")
+        followup_segmentation = followup.pop("_segmentation")
+
+        comparison = await asyncio.to_thread(
+            EvolutionComparator().compare,
+            baseline_segmentation["image"], baseline_segmentation["mask"], baseline["abcd_metrics"],
+            followup_segmentation["image"], followup_segmentation["mask"], followup["abcd_metrics"],
+            parsed_baseline_date, parsed_followup_date, reported_changes, reported_symptoms,
+            clean_lesion_site, clean_prior_history,
+        )
+        evolution = comparison.to_rag_evolution()
+        case_data = {
+            "case_id": f"EVOL-{uuid.uuid4().hex[:10].upper()}",
+            "prediction": followup["prediction"]["label"],
+            "confidence": float(followup["prediction"]["confidence"]),
+            "abcde_metrics": {
+                **followup["abcd_metrics"],
+                "evolution": evolution,
+            },
+        }
+
+        def _generate_report():
+            return create_agent().generate_report(case_data)
+
+        report = await asyncio.to_thread(_generate_report)
+        return {
+            "case_id": report.get("case_id"),
+            "baseline": baseline,
+            "followup": followup,
+            "evolution_metrics": comparison.model_dump(mode="json"),
+            "rag_report": report,
+        }
+
+    except HTTPException:
+        raise
+    except (ValueError, KeyError) as exc:
+        logger.warning("Evolution comparison could not be completed: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Evolution comparison could not be completed: {exc}",
+        ) from exc
+    except Exception as exc:
+        logger.error("Unexpected evolution comparison failure: %s", exc, exc_info=True)
+        global_metrics.record_error()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An error occurred while comparing the two lesion visits.",
+        ) from exc
+    finally:
+        for path in temp_paths:
+            if os.path.exists(path):
+                try:
+                    os.remove(path)
+                except OSError as exc:
+                    logger.warning("Could not remove temporary evolution upload %s: %s", path, exc)
 
 
 # ============================================================
