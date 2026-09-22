@@ -14,6 +14,9 @@ Usage:
     python main.py orchestrate <image># Run full 4-phase pipeline on an image
     python main.py gradcam <image>    # Generate Grad-CAM visualization
     python main.py serve              # Start FastAPI server
+    python main.py build-rag          # Build Qdrant + BM25 hybrid index
+    python main.py evaluate-rag       # Run ABCDE RAG evaluation suite
+    python main.py rag-test <image>   # Image → ABCDE → Agentic RAG report
 """
 
 import sys
@@ -205,6 +208,86 @@ def main():
         # again. Opt in explicitly for source-only development.
         reload_enabled = os.getenv("UVICORN_RELOAD", "0").lower() in {"1", "true", "yes"}
         uvicorn.run("api.server:app", host=host, port=port, reload=reload_enabled)
+
+    # ── Agentic RAG v4 Commands ──────────────────────────────
+
+    elif command == "build-rag":
+        print("\n=== Building Agentic RAG v4 Hybrid Index ===")
+        print("This will read your knowledge base, create Qdrant vectors,")
+        print("BM25 index, and parent chunk store.\n")
+        from rag_pipeline.create_vector_db import main as build_rag_index
+        build_rag_index()
+
+    elif command == "evaluate-rag":
+        print("\n=== Running Agentic RAG v4 Evaluation Suite ===")
+        from rag_pipeline.evaluate_rag import run_evaluation
+        run_evaluation()
+
+    elif command == "rag-test":
+        if len(sys.argv) < 3:
+            print("Usage: python main.py rag-test <image_path>")
+            sys.exit(1)
+
+        import json
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s | %(name)s | %(levelname)s | %(message)s",
+            datefmt="%H:%M:%S",
+        )
+
+        image_path = sys.argv[2]
+        print(f"\n{'='*60}")
+        print(f"  Agentic RAG v4 — Image → ABCDE → Evidence Report")
+        print(f"  Image: {image_path}")
+        print(f"{'='*60}\n")
+
+        # Phase 1: Run the existing diagnosis engine
+        from src.engine.engine import CoreDiagnosisEngine
+        engine = CoreDiagnosisEngine("config.yaml")
+        diag = engine.diagnose(image_path, save_mask=False)
+
+        # Map to ABCDE case data
+        case_data = {
+            "case_id": f"CLI-TEST-001",
+            "prediction": diag.diagnosis.prediction,
+            "confidence": float(diag.diagnosis.confidence),
+            "abcde_metrics": {
+                "asymmetry_index": diag.clinical_features.get("asymmetry", None)
+                    and diag.clinical_features["asymmetry"].score_numeric or 0.0,
+                "border_irregularity_score": diag.clinical_features.get("border", None)
+                    and diag.clinical_features["border"].score_numeric or 0.0,
+                "color_variation_score": diag.clinical_features.get("color", None)
+                    and diag.clinical_features["color"].score_numeric or 0.0,
+                "diameter_pixels": diag.clinical_features.get("diameter", None)
+                    and diag.clinical_features["diameter"].score_numeric or 0.0,
+                "evolution": {
+                    "reported_change": False,
+                    "status": "single_timepoint_capture",
+                    "notes": "Static image — evolution requires clinical history."
+                }
+            }
+        }
+
+        print(f"\nDiagnosis: {diag.diagnosis.prediction} ({diag.diagnosis.confidence:.1f}%)")
+        print(f"\nSending to Agentic RAG v4...\n")
+
+        # Phase 2: Run v4 RAG agent
+        from rag_pipeline import create_agent
+        agent = create_agent()
+        report = agent.generate_report(case_data)
+
+        # Display
+        print(f"\n{'='*60}")
+        print("ABCDE RAG REPORT")
+        print(f"{'='*60}")
+        print(json.dumps(report, indent=2, default=str))
+
+        # Save
+        output_path = Path("outputs") / f"{Path(image_path).stem}_rag_report.json"
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(output_path, "w") as f:
+            json.dump(report, f, indent=2, default=str)
+        print(f"\nReport saved to: {output_path}")
 
     else:
         print(f"Unknown command: {command}")

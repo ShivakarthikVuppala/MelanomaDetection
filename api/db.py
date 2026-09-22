@@ -21,7 +21,8 @@ def get_db():
             return None
             
         try:
-            client = AsyncIOMotorClient(mongo_uri, serverSelectionTimeoutMS=5000)
+            import certifi
+            client = AsyncIOMotorClient(mongo_uri, serverSelectionTimeoutMS=5000, tlsCAFile=certifi.where())
             # Default database name if none specified in URI is 'melanoma_db'
             db = client.get_database("melanoma_db")
             logger.info("Successfully connected to MongoDB.")

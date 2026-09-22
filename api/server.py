@@ -568,3 +568,256 @@ async def analyze_image(
 
     await _save_analysis(analysis)
     return analysis
+
+
+# =====================================================================
+# Agentic RAG v4 — ABCDE Evidence Pipeline Endpoints
+# =====================================================================
+# These endpoints use the v4 agentic RAG agent for ABCDE-framework
+# medical evidence retrieval and report generation.  They coexist
+# with the existing orchestrator endpoints above.
+# =====================================================================
+
+import asyncio
+from io import BytesIO
+
+_rag_agent_module = None  # lazy-loaded
+
+
+def _get_rag_module():
+    """Lazy-import the agent module so the server still starts even
+    when the Qdrant index hasn't been built yet."""
+    global _rag_agent_module
+    if _rag_agent_module is None:
+        from rag_pipeline import agent as _mod
+        _rag_agent_module = _mod
+    return _rag_agent_module
+
+
+# ---------- POST /rag/analyze-case ----------
+
+@app.post("/rag/analyze-case")
+async def rag_analyze_case(request: Request):
+    """
+    Accepts a JSON body with case_id, prediction, confidence, and
+    abcde_metrics.  Returns the full ABCDE RAG report with reasoning
+    trace and performance metrics.
+    """
+    body = await request.json()
+
+    # Normalise field name coming from the existing pipeline
+    if body.get("abcde_metrics") is None and body.get("abcd_metrics") is not None:
+        body["abcde_metrics"] = body["abcd_metrics"]
+
+    def _generate():
+        mod = _get_rag_module()
+        rag_agent = mod.create_agent()
+        return rag_agent.generate_report(body)
+
+    try:
+        report = await run_in_threadpool(_generate)
+        return JSONResponse(content=report)
+    except Exception:
+        logger.exception("RAG analyze-case failed")
+        raise HTTPException(status_code=500, detail="RAG analysis failed. Please try again.")
+
+
+# ---------- POST /rag/analyze-case/stream (SSE) ----------
+
+@app.post("/rag/analyze-case/stream")
+async def rag_analyze_case_stream(request: Request):
+    """
+    Same as /rag/analyze-case but returns Server-Sent Events streaming
+    the reasoning trace steps in real time, followed by the full report.
+    """
+    import json as _json
+
+    body = await request.json()
+    if body.get("abcde_metrics") is None and body.get("abcd_metrics") is not None:
+        body["abcde_metrics"] = body["abcd_metrics"]
+
+    async def event_generator():
+        try:
+            yield {
+                "event": "started",
+                "data": _json.dumps({
+                    "case_id": body.get("case_id", ""),
+                    "message": "Analysis started"
+                })
+            }
+
+            def _generate():
+                mod = _get_rag_module()
+                rag_agent = mod.create_agent()
+                return rag_agent.generate_report(body)
+
+            report = await asyncio.to_thread(_generate)
+
+            # Emit reasoning trace steps
+            trace = report.get("reasoning_trace", {})
+            for step in trace.get("trace", []):
+                yield {
+                    "event": step.get("step", "trace"),
+                    "data": _json.dumps(step.get("detail", {}), default=str)
+                }
+
+            # Emit performance metrics
+            perf = report.get("performance_metrics", {})
+            yield {"event": "performance", "data": _json.dumps(perf, default=str)}
+
+            # Emit final report
+            yield {"event": "report", "data": _json.dumps(report, default=str)}
+            yield {"event": "done", "data": _json.dumps({"status": "complete"})}
+
+        except Exception as e:
+            logger.exception("RAG streaming error")
+            yield {"event": "error", "data": _json.dumps({"error": str(e)})}
+
+    try:
+        from sse_starlette.sse import EventSourceResponse
+        return EventSourceResponse(event_generator())
+    except ImportError:
+        # Fallback: run synchronously
+        def _generate():
+            mod = _get_rag_module()
+            rag_agent = mod.create_agent()
+            return rag_agent.generate_report(body)
+        report = await asyncio.to_thread(_generate)
+        return JSONResponse(content=report)
+
+
+# ---------- POST /rag/analyze-image ----------
+
+@app.post("/rag/analyze-image")
+async def rag_analyze_image(
+    file: UploadFile = File(...),
+):
+    """
+    Upload a dermoscopic image.  Runs the existing orchestrator's
+    core diagnosis engine, extracts ABCDE metrics, then feeds them
+    into the v4 agentic RAG for evidence-backed interpretation.
+    """
+    import json as _json
+
+    # ---- validate extension & MIME ----
+    fname = (file.filename or "upload.jpg").lower()
+    _, ext = os.path.splitext(fname)
+    if ext not in ALLOWED_EXTENSIONS:
+        raise HTTPException(400, f"Invalid format '{ext}'")
+    ctype = (file.content_type or "").lower()
+    if ctype not in ALLOWED_MIME_TYPES:
+        raise HTTPException(400, f"Unsupported MIME type '{ctype}'")
+
+    content = await file.read()
+    if len(content) > MAX_UPLOAD_BYTES:
+        raise HTTPException(413, "File too large")
+    if not content:
+        raise HTTPException(400, "Empty file")
+
+    # Verify image integrity
+    try:
+        img = Image.open(BytesIO(content))
+        img.verify()
+    except Exception:
+        raise HTTPException(400, "Corrupt or invalid image")
+
+    # Save to temp file
+    temp_dir = UPLOADS_DIR / "rag_temp"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    temp_name = f"{uuid.uuid4().hex}{ext}"
+    temp_path = temp_dir / temp_name
+
+    try:
+        with open(temp_path, "wb") as f:
+            f.write(content)
+
+        def _analyze():
+            # Use the existing orchestrator engine for image analysis
+            from src.engine.engine import CoreDiagnosisEngine
+            engine = CoreDiagnosisEngine("config.yaml")
+            diag = engine.diagnose(str(temp_path), save_mask=False)
+
+            # Map existing engine output to ABCDE case format
+            case_data = {
+                "case_id": f"IMG-{uuid.uuid4().hex[:8].upper()}",
+                "prediction": diag.diagnosis.prediction,
+                "confidence": float(diag.diagnosis.confidence),
+                "abcde_metrics": {
+                    "asymmetry_index": diag.clinical_features.get("asymmetry", {}).score_numeric
+                        if "asymmetry" in diag.clinical_features else 0.0,
+                    "border_irregularity_score": diag.clinical_features.get("border", {}).score_numeric
+                        if "border" in diag.clinical_features else 0.0,
+                    "color_variation_score": diag.clinical_features.get("color", {}).score_numeric
+                        if "color" in diag.clinical_features else 0.0,
+                    "diameter_pixels": diag.clinical_features.get("diameter", {}).score_numeric
+                        if "diameter" in diag.clinical_features else 0.0,
+                    "evolution": {
+                        "reported_change": False,
+                        "status": "single_timepoint_capture",
+                        "notes": "Static image — evolution requires clinical history."
+                    }
+                }
+            }
+
+            mod = _get_rag_module()
+            rag_agent = mod.create_agent()
+            report = rag_agent.generate_report(case_data)
+
+            return {
+                "case_id": case_data["case_id"],
+                "image_prediction": {
+                    "label": diag.diagnosis.prediction,
+                    "confidence": float(diag.diagnosis.confidence),
+                },
+                "abcde_metrics": case_data["abcde_metrics"],
+                "rag_report": report,
+            }
+
+        result = await run_in_threadpool(_analyze)
+        return JSONResponse(content=result)
+
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("RAG image analysis failed")
+        raise HTTPException(500, "Image analysis failed")
+    finally:
+        if temp_path.exists():
+            try:
+                temp_path.unlink()
+            except Exception:
+                pass
+
+
+# ---------- GET /rag/health ----------
+
+@app.get("/rag/health")
+async def rag_health():
+    """Quick health check for the RAG subsystem."""
+    try:
+        mod = _get_rag_module()
+        return {
+            "status": "healthy",
+            "embedding_model": mod.settings.EMBEDDING_MODEL,
+            "reranker_model": mod.settings.RERANKER_MODEL,
+            "qdrant_mode": mod.settings.QDRANT_MODE,
+            "bm25_available": mod._bm25_available,
+            "parent_store_loaded": bool(mod._parent_store),
+        }
+    except Exception as e:
+        return JSONResponse(
+            status_code=503,
+            content={"status": "unavailable", "error": str(e)}
+        )
+
+
+# ---------- GET /rag/metrics ----------
+
+@app.get("/rag/metrics")
+async def rag_metrics():
+    """Return aggregated RAG performance metrics."""
+    try:
+        from observability import global_metrics
+        return global_metrics.get_stats()
+    except Exception as e:
+        return {"error": str(e)}
