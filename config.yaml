@@ -30,6 +30,13 @@ quality:
 # Optional planar reference metadata. Leave null when absent; no physical
 # scale is invented when the image has no validated reference.
 calibration:
+  # ChArUco is the preferred scale reference for physical diameter. Fill in
+  # the printed board dimensions in millimetres; leave null when absent.
+  charuco_squares_x: null
+  charuco_squares_y: null
+  charuco_square_length_mm: null
+  charuco_marker_length_mm: null
+  charuco_dictionary_id: 0  # OpenCV DICT_4X4_50
   aruco_marker_size_mm: null
   aruco_marker_id: null
   checkerboard_inner_corners: []

@@ -162,6 +162,11 @@ class CoreDiagnosisEngine:
             lesion_mask=raw_mask,
             aruco_marker_size_mm=self.config.get("calibration", {}).get("aruco_marker_size_mm"),
             aruco_marker_id=self.config.get("calibration", {}).get("aruco_marker_id"),
+            charuco_squares_x=self.config.get("calibration", {}).get("charuco_squares_x"),
+            charuco_squares_y=self.config.get("calibration", {}).get("charuco_squares_y"),
+            charuco_square_length_mm=self.config.get("calibration", {}).get("charuco_square_length_mm"),
+            charuco_marker_length_mm=self.config.get("calibration", {}).get("charuco_marker_length_mm"),
+            charuco_dictionary_id=self.config.get("calibration", {}).get("charuco_dictionary_id", 0),
             checkerboard_inner_corners=tuple(self.config.get("calibration", {}).get("checkerboard_inner_corners", [])) or None,
             checkerboard_square_size_mm=self.config.get("calibration", {}).get("checkerboard_square_size_mm"),
         )
@@ -262,6 +267,7 @@ class CoreDiagnosisEngine:
             measurements["lesion"] = extract_lesion_measurements(
                 measurement_image, mask, pixels_per_mm=pixels_per_mm,
                 scale_confidence=scale_cal.confidence,
+                pixel_to_mm_homography=scale_cal.homography,
             )
 
         # Keep the complete, machine-readable measurement contract together
@@ -287,7 +293,9 @@ class CoreDiagnosisEngine:
                 }
                 if scale_cal.reference_bbox_px is not None else {}
             ),
-            "measurement_method": "maximum_feret_diameter",
+            "measurement_method": measurements["lesion"].get(
+                "measurement_method", "maximum_feret_diameter"
+            ),
         })
 
         # Always propagate calibration metadata, including invalid attempts,

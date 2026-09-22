@@ -10,7 +10,8 @@ timm>=1.0.0
 
 # Augmentation & CV
 albumentations==2.0.8
-opencv-python-headless>=4.10.0
+# Includes cv2.aruco / ChArUco used for validated metric scale calibration.
+opencv-contrib-python-headless>=4.10.0
 scikit-image>=0.24.0
 scikit-learn>=1.5.0
 

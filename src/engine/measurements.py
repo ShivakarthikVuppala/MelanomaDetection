@@ -46,6 +46,21 @@ def _feret_diameters(contour: np.ndarray) -> tuple[float, float, tuple[float, fl
     )
 
 
+def _project_contour_to_mm(
+    contour: np.ndarray, pixel_to_mm_homography: np.ndarray,
+) -> np.ndarray:
+    """Map an image-space contour to its calibrated planar coordinates."""
+    homography = np.asarray(pixel_to_mm_homography, dtype=np.float64)
+    if homography.shape != (3, 3) or not np.isfinite(homography).all():
+        raise ValueError("pixel_to_mm_homography must be a finite 3x3 matrix")
+    points_mm = cv2.perspectiveTransform(
+        np.asarray(contour, dtype=np.float32).reshape(1, -1, 2), homography
+    )[0]
+    if not np.isfinite(points_mm).all() or len(points_mm) < 3:
+        raise ValueError("homography produced invalid physical contour coordinates")
+    return points_mm.reshape(-1, 1, 2).astype(np.float32)
+
+
 def refine_lesion_mask(
     mask: np.ndarray,
     max_area_ratio: float = 0.35,
@@ -232,13 +247,18 @@ def extract_lesion_measurements(
     mask: np.ndarray,
     pixels_per_mm: Optional[float] = None,
     scale_confidence: Optional[float] = None,
+    pixel_to_mm_homography: Optional[np.ndarray] = None,
 ) -> dict:
     """Return raw measurements; no clinical interpretation is performed here.
 
     Args:
         image:         RGB image array (H, W, 3).
         mask:          Binary segmentation mask (H, W).
-        pixels_per_mm: If provided, physical (mm) measurements are included.
+        pixels_per_mm: Fallback local scale for physical measurements.
+        pixel_to_mm_homography: Optional image-pixel-to-mm planar transform.
+            When supplied, physical Feret diameter, perimeter, and area are
+            computed after perspective correction rather than by dividing all
+            image pixels by one global scale.
 
     Returns:
         Dict of measurement values.
@@ -304,7 +324,45 @@ def extract_lesion_measurements(
         "measurement_method": "maximum_feret_diameter",
     }
 
-    # Physical measurements (when a reference scale is available)
+    # A planar board/ruler calibration corrects perspective before measuring
+    # the contour. This is more accurate than applying one pixels/mm value
+    # across a lesion and a reference captured at different image positions.
+    if pixel_to_mm_homography is not None:
+        try:
+            contour_mm = _project_contour_to_mm(contour, pixel_to_mm_homography)
+            diameter_mm, minimum_feret_mm, feret_endpoints_mm = _feret_diameters(contour_mm)
+            area_mm2 = float(cv2.contourArea(contour_mm))
+            perimeter_mm = float(cv2.arcLength(contour_mm, True))
+            equivalent_mm = float(np.sqrt(4.0 * area_mm2 / np.pi)) if area_mm2 > 0 else 0.0
+            if not all(np.isfinite(value) and value >= 0 for value in (diameter_mm, minimum_feret_mm, area_mm2, perimeter_mm)):
+                raise ValueError("non-finite physical contour measurement")
+            result.update({
+                "physical_scale_available": True,
+                "diameter_mm": round(diameter_mm, 3),
+                "lesion_diameter_mm": round(diameter_mm, 3),
+                "max_feret_diameter_mm": round(diameter_mm, 3),
+                "minimum_feret_diameter_mm": round(minimum_feret_mm, 3),
+                "equivalent_diameter_mm": round(equivalent_mm, 3),
+                "area_mm2": round(area_mm2, 2),
+                "perimeter_mm": round(perimeter_mm, 2),
+                "feret_endpoints_mm": tuple(round(float(value), 3) for value in feret_endpoints_mm),
+                "measurement_method": "projective_maximum_feret_diameter",
+                "physical_units_note": "Physical contour measurements use a planar-reference homography to correct perspective.",
+            })
+            if pixels_per_mm and pixels_per_mm > 0:
+                result["pixels_per_mm"] = round(float(pixels_per_mm), 4)
+            result["measurement_confidence"] = round(
+                min(lesion_confidence, float(scale_confidence))
+                if scale_confidence is not None else lesion_confidence, 4
+            )
+            return result
+        except (ValueError, cv2.error):
+            # A valid scalar calibration is still preferable to withholding a
+            # measurement if a malformed transform was passed by a caller.
+            pass
+
+    # Physical measurements from a validated local scale when no planar
+    # transform is available (e.g., a circular sticker or coin).
     if pixels_per_mm and pixels_per_mm > 0:
         ppm = pixels_per_mm
         result["physical_scale_available"] = True

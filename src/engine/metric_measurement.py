@@ -96,6 +96,94 @@ def _planar_calibration(
 class ReferenceCalibrator:
     """High-confidence reference calibration methods in priority order."""
 
+    def charuco(
+        self,
+        image_rgb: np.ndarray,
+        squares_x: int,
+        squares_y: int,
+        square_length_mm: float,
+        marker_length_mm: float,
+        dictionary_id: int = 0,
+    ) -> MetricCalibration:
+        """Calibrate from a ChArUco board using all visible sub-pixel corners.
+
+        ChArUco is preferred over a single ArUco marker for metric work: it
+        retains partial-view marker detection while using chessboard corners
+        for substantially more accurate sub-pixel localization.  The
+        implementation supports both the current OpenCV API and the older
+        ``*_create`` API used by OpenCV 4.6 and earlier.
+        """
+        if (
+            not hasattr(cv2, "aruco")
+            or min(squares_x, squares_y) < 3
+            or square_length_mm <= 0
+            or marker_length_mm <= 0
+            or marker_length_mm >= square_length_mm
+        ):
+            return MetricCalibration(reference_type="charuco", warning="valid ChArUco board settings or OpenCV ArUco support are unavailable")
+
+        aruco = cv2.aruco
+        try:
+            dictionary = aruco.getPredefinedDictionary(int(dictionary_id))
+            if hasattr(aruco, "CharucoBoard"):
+                board = aruco.CharucoBoard(
+                    (int(squares_x), int(squares_y)),
+                    float(square_length_mm), float(marker_length_mm), dictionary,
+                )
+            else:
+                board = aruco.CharucoBoard_create(
+                    int(squares_x), int(squares_y), float(square_length_mm),
+                    float(marker_length_mm), dictionary,
+                )
+            gray = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2GRAY)
+            if hasattr(aruco, "CharucoDetector"):
+                # OpenCV 4.7+ replaced interpolateCornersCharuco with the
+                # CharucoDetector API. It performs marker detection and
+                # corner interpolation in one call.
+                charuco_corners, charuco_ids, _, _ = aruco.CharucoDetector(board).detectBoard(gray)
+                count = 0 if charuco_ids is None else len(charuco_ids)
+            elif hasattr(aruco, "ArucoDetector"):
+                marker_corners, marker_ids, _ = aruco.ArucoDetector(dictionary, aruco.DetectorParameters()).detectMarkers(gray)
+                if marker_ids is None or len(marker_ids) == 0:
+                    return MetricCalibration(reference_type="charuco", warning="no ChArUco markers detected")
+                count, charuco_corners, charuco_ids = aruco.interpolateCornersCharuco(
+                    marker_corners, marker_ids, gray, board
+                )
+            else:
+                marker_corners, marker_ids, _ = aruco.detectMarkers(gray, dictionary, parameters=aruco.DetectorParameters_create())
+                if marker_ids is None or len(marker_ids) == 0:
+                    return MetricCalibration(reference_type="charuco", warning="no ChArUco markers detected")
+                count, charuco_corners, charuco_ids = aruco.interpolateCornersCharuco(
+                    marker_corners, marker_ids, gray, board
+                )
+        except (AttributeError, cv2.error) as exc:
+            return MetricCalibration(reference_type="charuco", warning=f"ChArUco detection failed: {exc}")
+
+        if charuco_ids is None or charuco_corners is None or int(count) < 6:
+            return MetricCalibration(reference_type="charuco", warning="fewer than six ChArUco corners were interpolated")
+        try:
+            board_points = board.getChessboardCorners() if hasattr(board, "getChessboardCorners") else board.chessboardCorners
+            ids = np.asarray(charuco_ids, dtype=np.int32).ravel()
+            image_points = np.asarray(charuco_corners, dtype=np.float32).reshape(-1, 2)
+            world_points = np.asarray(board_points, dtype=np.float32)[ids, :2]
+        except (AttributeError, IndexError, ValueError) as exc:
+            return MetricCalibration(reference_type="charuco", warning=f"ChArUco corner mapping failed: {exc}")
+
+        # A narrow line of detected points cannot reliably correct perspective.
+        hull_area = float(cv2.contourArea(cv2.convexHull(image_points)))
+        image_area = float(image_rgb.shape[0] * image_rgb.shape[1])
+        if hull_area / max(image_area, 1.0) < 0.002:
+            return MetricCalibration(reference_type="charuco", warning="ChArUco corners cover too little image area for reliable calibration")
+        return _planar_calibration(
+            image_points, world_points, "charuco",
+            {
+                "squares_x": int(squares_x), "squares_y": int(squares_y),
+                "square_length_mm": float(square_length_mm),
+                "marker_length_mm": float(marker_length_mm),
+                "dictionary_id": int(dictionary_id), "interpolated_corner_count": int(count),
+            },
+        )
+
     def aruco(
         self, image_rgb: np.ndarray, marker_size_mm: float,
         marker_id: Optional[int] = None,

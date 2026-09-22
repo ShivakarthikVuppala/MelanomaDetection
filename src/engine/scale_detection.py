@@ -129,6 +129,11 @@ class ScaleDetector:
                lesion_mask: Optional[np.ndarray] = None,
                aruco_marker_size_mm: Optional[float] = None,
                aruco_marker_id: Optional[int] = None,
+               charuco_squares_x: Optional[int] = None,
+               charuco_squares_y: Optional[int] = None,
+               charuco_square_length_mm: Optional[float] = None,
+               charuco_marker_length_mm: Optional[float] = None,
+               charuco_dictionary_id: int = 0,
                checkerboard_inner_corners: Optional[tuple[int, int]] = None,
                checkerboard_square_size_mm: Optional[float] = None) -> ScaleCalibration:
         method = (method or "none").strip().lower()
@@ -147,6 +152,18 @@ class ScaleDetector:
         # perspective instead of assuming one global pixels/mm value.
         calibrator = ReferenceCalibrator()
         planar = []
+        # ChArUco gives more accurate sub-pixel corners than a bare ArUco
+        # marker while still tolerating partial board views.  It is therefore
+        # the preferred planar reference when a board is configured.
+        if all(value is not None for value in (
+            charuco_squares_x, charuco_squares_y, charuco_square_length_mm,
+            charuco_marker_length_mm,
+        )):
+            planar.append(calibrator.charuco(
+                image, int(charuco_squares_x), int(charuco_squares_y),
+                float(charuco_square_length_mm), float(charuco_marker_length_mm),
+                int(charuco_dictionary_id),
+            ))
         if aruco_marker_size_mm:
             planar.append(calibrator.aruco(image, aruco_marker_size_mm, aruco_marker_id))
         if checkerboard_inner_corners and checkerboard_square_size_mm:
