@@ -16,7 +16,7 @@ export default function Profile() {
   const [loading, setLoading] = useState(false);
 
   const initials =
-    ((user?.first_name?.[0] || '') + (user?.last_name?.[0] || '')).toUpperCase() || 'U';
+    ((user?.first_name?.[0] || '') + (user?.last_name?.[0] || '')).toUpperCase() || 'MD';
 
   const startEdit = () => {
     setForm({
@@ -44,14 +44,15 @@ export default function Profile() {
       errs.phone = 'Please enter a valid phone number.';
     }
     if (!form.email.trim()) {
-      errs.email = 'Email is required.';
+      errs.email = 'Email address is required.';
     } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim())) {
       errs.email = 'Please enter a valid email address.';
     }
     return errs;
   };
 
-  const handleSave = async () => {
+  const handleSave = async (e) => {
+    e.preventDefault();
     const errs = validate();
     setErrors(errs);
     if (Object.keys(errs).length > 0) return;
@@ -65,7 +66,7 @@ export default function Profile() {
         email: form.email.trim(),
       });
       setEditing(false);
-      showToast('Profile updated successfully!', 'success');
+      showToast('Profile information updated successfully.', 'success');
     } catch (err) {
       showToast(err.message || 'Failed to update profile.', 'error');
     } finally {
@@ -78,163 +79,179 @@ export default function Profile() {
     if (errors[field]) setErrors((prev) => ({ ...prev, [field]: '' }));
   };
 
-  const createdDate = user?.created_at
-    ? new Date(user.created_at).toLocaleDateString('en-US', {
-        year: 'numeric',
-        month: 'long',
-        day: 'numeric',
-      })
-    : '—';
-
   return (
-    <section className="page active" id="page-profile">
-      <div className="page-header">
-        <h1 className="page-title">Profile</h1>
-        <p className="page-subtitle">View and manage your account information.</p>
+    <div className="page-container" id="page-profile">
+      {/* Page Header */}
+      <div className="page-header-clean">
+        <h1 className="page-title-clean">Profile</h1>
+        <p className="page-subtitle-clean">
+          Manage your personal details and account contact information.
+        </p>
       </div>
 
-      <div className="profile-layout">
-        {/* Profile Card */}
-        <div className="profile-card">
+      <div className="profile-container-narrow">
+        <div className="card profile-card">
+          {/* Avatar and Info Header */}
           <div className="profile-card-header">
-            <div className="profile-avatar-large">{initials}</div>
-            <div className="profile-identity">
-              <h2>{user?.first_name} {user?.last_name}</h2>
-              <p className="profile-email-display">{user?.email}</p>
-              <span className="profile-badge">
-                <i className="fas fa-calendar-alt"></i>
-                Member since {createdDate}
+            <div className="profile-avatar-large" aria-hidden="true">
+              {initials}
+            </div>
+            <div className="profile-header-info">
+              <h2 className="profile-name">
+                {user?.first_name} {user?.last_name}
+              </h2>
+              <span className="profile-email-badge">
+                {user?.email}
               </span>
             </div>
-          </div>
-        </div>
 
-        {/* Profile Details */}
-        <div className="profile-details-card">
-          <div className="profile-details-header">
-            <h3>
-              <i className="fas fa-id-card" style={{ color: 'var(--primary)' }}></i>
-              Personal Information
-            </h3>
-            {!editing && (
-              <button className="btn btn-outline btn-sm" onClick={startEdit}>
-                <i className="fas fa-pen"></i> Edit Profile
-              </button>
-            )}
+            <div className="profile-header-action">
+              {!editing ? (
+                <button
+                  type="button"
+                  className="btn btn-outline btn-sm"
+                  onClick={startEdit}
+                >
+                  <i className="fas fa-pen" aria-hidden="true"></i>
+                  <span>Edit Profile</span>
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="btn btn-outline btn-sm"
+                  onClick={cancelEdit}
+                  disabled={loading}
+                >
+                  Cancel
+                </button>
+              )}
+            </div>
           </div>
 
-          {editing ? (
-            <div className="profile-edit-form">
-              <div className="auth-field-row">
-                <div className={`auth-field ${errors.first_name ? 'has-error' : ''}`}>
-                  <label htmlFor="profile-first-name">First Name</label>
-                  <div className="auth-input-wrap">
-                    <i className="fas fa-user auth-input-icon"></i>
+          {/* Form */}
+          <form onSubmit={handleSave} noValidate className="profile-form">
+            <div className="form-grid-2col">
+              <div className="form-group-clean">
+                <label className="form-label-clean" htmlFor="profile-first-name">
+                  First Name
+                </label>
+                {editing ? (
+                  <>
                     <input
                       id="profile-first-name"
                       type="text"
+                      className={`form-input-clean ${errors.first_name ? 'input-error' : ''}`}
                       value={form.first_name}
                       onChange={handleChange('first_name')}
                     />
-                  </div>
-                  {errors.first_name && <span className="auth-field-error">{errors.first_name}</span>}
-                </div>
-                <div className={`auth-field ${errors.last_name ? 'has-error' : ''}`}>
-                  <label htmlFor="profile-last-name">Last Name</label>
-                  <div className="auth-input-wrap">
-                    <i className="fas fa-user auth-input-icon"></i>
+                    {errors.first_name && (
+                      <span className="field-error-text">{errors.first_name}</span>
+                    )}
+                  </>
+                ) : (
+                  <div className="form-static-value">{user?.first_name || '—'}</div>
+                )}
+              </div>
+
+              <div className="form-group-clean">
+                <label className="form-label-clean" htmlFor="profile-last-name">
+                  Last Name
+                </label>
+                {editing ? (
+                  <>
                     <input
                       id="profile-last-name"
                       type="text"
+                      className={`form-input-clean ${errors.last_name ? 'input-error' : ''}`}
                       value={form.last_name}
                       onChange={handleChange('last_name')}
                     />
-                  </div>
-                  {errors.last_name && <span className="auth-field-error">{errors.last_name}</span>}
-                </div>
+                    {errors.last_name && (
+                      <span className="field-error-text">{errors.last_name}</span>
+                    )}
+                  </>
+                ) : (
+                  <div className="form-static-value">{user?.last_name || '—'}</div>
+                )}
+              </div>
+            </div>
+
+            <div className="form-grid-2col">
+              <div className="form-group-clean">
+                <label className="form-label-clean" htmlFor="profile-email">
+                  Email Address
+                </label>
+                {editing ? (
+                  <>
+                    <input
+                      id="profile-email"
+                      type="email"
+                      className={`form-input-clean ${errors.email ? 'input-error' : ''}`}
+                      value={form.email}
+                      onChange={handleChange('email')}
+                    />
+                    {errors.email && (
+                      <span className="field-error-text">{errors.email}</span>
+                    )}
+                  </>
+                ) : (
+                  <div className="form-static-value">{user?.email || '—'}</div>
+                )}
               </div>
 
-              <div className={`auth-field ${errors.phone ? 'has-error' : ''}`}>
-                <label htmlFor="profile-phone">Phone Number</label>
-                <div className="auth-input-wrap">
-                  <i className="fas fa-phone auth-input-icon"></i>
-                  <input
-                    id="profile-phone"
-                    type="tel"
-                    value={form.phone}
-                    onChange={handleChange('phone')}
-                  />
-                </div>
-                {errors.phone && <span className="auth-field-error">{errors.phone}</span>}
+              <div className="form-group-clean">
+                <label className="form-label-clean" htmlFor="profile-phone">
+                  Phone Number
+                </label>
+                {editing ? (
+                  <>
+                    <input
+                      id="profile-phone"
+                      type="tel"
+                      className={`form-input-clean ${errors.phone ? 'input-error' : ''}`}
+                      value={form.phone}
+                      onChange={handleChange('phone')}
+                    />
+                    {errors.phone && (
+                      <span className="field-error-text">{errors.phone}</span>
+                    )}
+                  </>
+                ) : (
+                  <div className="form-static-value">{user?.phone || '—'}</div>
+                )}
               </div>
+            </div>
 
-              <div className={`auth-field ${errors.email ? 'has-error' : ''}`}>
-                <label htmlFor="profile-email">Email Address</label>
-                <div className="auth-input-wrap">
-                  <i className="fas fa-envelope auth-input-icon"></i>
-                  <input
-                    id="profile-email"
-                    type="email"
-                    value={form.email}
-                    onChange={handleChange('email')}
-                  />
-                </div>
-                {errors.email && <span className="auth-field-error">{errors.email}</span>}
-              </div>
-
-              <div className="profile-edit-actions">
+            {editing && (
+              <div className="profile-form-actions">
                 <button
-                  className="btn btn-primary"
-                  onClick={handleSave}
+                  type="button"
+                  className="btn btn-outline"
+                  onClick={cancelEdit}
                   disabled={loading}
                 >
-                  {loading ? (
-                    <>
-                      <span className="auth-spinner"></span>
-                      Saving…
-                    </>
-                  ) : (
-                    <>
-                      <i className="fas fa-check"></i>
-                      Save Changes
-                    </>
-                  )}
-                </button>
-                <button className="btn btn-outline" onClick={cancelEdit} disabled={loading}>
                   Cancel
                 </button>
+                <button
+                  type="submit"
+                  className="btn btn-primary"
+                  disabled={loading}
+                >
+                  <i className="fas fa-check" aria-hidden="true"></i>
+                  <span>{loading ? 'Saving Changes...' : 'Save Profile'}</span>
+                </button>
               </div>
-            </div>
-          ) : (
-            <div className="profile-info-grid">
-              <div className="profile-info-item">
-                <span className="profile-info-label">
-                  <i className="fas fa-user"></i> First Name
-                </span>
-                <span className="profile-info-value">{user?.first_name}</span>
-              </div>
-              <div className="profile-info-item">
-                <span className="profile-info-label">
-                  <i className="fas fa-user"></i> Last Name
-                </span>
-                <span className="profile-info-value">{user?.last_name}</span>
-              </div>
-              <div className="profile-info-item">
-                <span className="profile-info-label">
-                  <i className="fas fa-phone"></i> Phone Number
-                </span>
-                <span className="profile-info-value">{user?.phone}</span>
-              </div>
-              <div className="profile-info-item">
-                <span className="profile-info-label">
-                  <i className="fas fa-envelope"></i> Email
-                </span>
-                <span className="profile-info-value">{user?.email}</span>
-              </div>
-            </div>
-          )}
+            )}
+          </form>
         </div>
       </div>
-    </section>
+
+      {/* Subtle Medical Disclaimer */}
+      <footer className="medical-disclaimer-box" role="note">
+        <p>
+          MelaDetect AI provides AI-assisted information and is not a medical diagnosis. If you notice concerning or changing skin lesions, consider consulting a qualified healthcare professional.
+        </p>
+      </footer>
+    </div>
   );
 }

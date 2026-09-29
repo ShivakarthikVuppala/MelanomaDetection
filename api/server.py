@@ -12,7 +12,7 @@ from typing import Dict, Optional
 
 import numpy as np
 import yaml
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile, Request
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile, Request, Depends
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -30,7 +30,7 @@ if env_path.exists():
                 key, val = line.split("=", 1)
                 os.environ[key.strip()] = val.strip()
 
-from .auth import router as auth_router
+from .auth import router as auth_router, get_current_user
 from .admin import router as admin_router
 from .schemas import (
     AnalysisResponse, AnalysisListItem, PhaseStatus,
@@ -62,6 +62,35 @@ app = FastAPI(
 async def startup_event():
     from .auth import seed_admin
     await seed_admin()
+
+    # ── Per-user data isolation setup ─────────────────────────────────────
+    from .db import get_db as _get_db
+    _startup_db = _get_db()
+    if _startup_db is not None:
+        # Create compound index for efficient per-user history queries
+        try:
+            await _startup_db["analyses"].create_index(
+                [("user_id", 1), ("diagnosis.metadata.timestamp", -1)],
+                name="user_id_timestamp",
+                background=True,
+            )
+        except Exception as _idx_err:
+            logger.warning(f"Could not create analyses index: {_idx_err}")
+        # Tag all pre-existing legacy records (no user_id) with a sentinel
+        # value so they are NEVER returned to any authenticated user.
+        try:
+            _legacy = await _startup_db["analyses"].update_many(
+                {"user_id": {"$exists": False}},
+                {"$set": {"user_id": "__legacy__"}},
+            )
+            if _legacy.modified_count:
+                logger.info(
+                    f"Tagged {_legacy.modified_count} legacy analysis record(s) "
+                    "with user_id='__legacy__' to prevent cross-user data leakage."
+                )
+        except Exception as _leg_err:
+            logger.warning(f"Could not tag legacy analyses: {_leg_err}")
+    # ── End per-user data isolation setup ─────────────────────────────────
 cors_origins = [origin.strip() for origin in os.getenv(
     "CORS_ORIGINS",
     "http://localhost:5173,http://localhost:3000,http://127.0.0.1:5173",
@@ -348,12 +377,14 @@ async def health():
 
 
 @app.get("/api/analyses", response_model=list[AnalysisListItem])
-async def list_analyses():
+async def list_analyses(current_user: dict = Depends(get_current_user)):
     db = get_db()
     items = []
+    user_id = str(current_user.get("id") or current_user.get("_id", ""))
     if db is not None:
         try:
-            cursor = db["analyses"].find({"diagnosis": {"$exists": True}}).sort("diagnosis.metadata.timestamp", -1)
+            query = {"diagnosis": {"$exists": True}, "user_id": user_id}
+            cursor = db["analyses"].find(query).sort("diagnosis.metadata.timestamp", -1)
             async for doc in cursor:
                 try:
                     items.append(AnalysisListItem(
@@ -370,9 +401,9 @@ async def list_analyses():
         except Exception as e:
             logger.error(f"MongoDB error in list_analyses: {e}")
             # Fall back to in-memory store
-            
+
     for analysis in analyses_store.values():
-        if analysis.diagnosis:
+        if analysis.diagnosis and getattr(analysis, 'user_id', None) == user_id:
             items.append(AnalysisListItem(
                 analysis_id=analysis.analysis_id,
                 image_name=analysis.diagnosis.metadata.image_id or analysis.analysis_id,
@@ -385,18 +416,40 @@ async def list_analyses():
 
 
 @app.get("/api/analyses/{analysis_id}", response_model=AnalysisResponse)
-async def get_analysis(analysis_id: str):
+async def get_analysis(
+    analysis_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    """Return a single analysis. Only the owning user may access it."""
+    user_id = str(current_user.get("id") or current_user.get("_id", ""))
     db = get_db()
     if db is not None:
         try:
             doc = await db["analyses"].find_one({"analysis_id": analysis_id})
             if doc:
+                # Enforce ownership: if the document has a user_id it MUST match.
+                doc_owner = doc.get("user_id", "")
+                if doc_owner and doc_owner != user_id:
+                    raise HTTPException(status_code=404, detail={
+                        "error_code": "analysis_not_found",
+                        "message": "Analysis not found.",
+                    })
                 return AnalysisResponse(**doc)
+        except HTTPException:
+            raise
         except Exception as e:
             logger.error(f"MongoDB error in get_analysis: {e}")
-            
+
+    # In-memory fallback — also check ownership
     analysis = analyses_store.get(analysis_id)
     if analysis is None:
+        raise HTTPException(status_code=404, detail={
+            "error_code": "analysis_not_found",
+            "message": "Analysis not found.",
+        })
+    # If the in-memory record was saved with a user_id, verify it
+    stored_owner = getattr(analysis, 'user_id', None)
+    if stored_owner and stored_owner != user_id:
         raise HTTPException(status_code=404, detail={
             "error_code": "analysis_not_found",
             "message": "Analysis not found.",
@@ -466,14 +519,17 @@ async def preprocess_image(file: UploadFile = File(...)):
     )
 
 
-async def _save_analysis(analysis: AnalysisResponse):
+async def _save_analysis(analysis: AnalysisResponse, user_id: str = ""):
     analyses_store[analysis.analysis_id] = analysis
     db = get_db()
     if db is not None:
         try:
+            doc = analysis.model_dump(mode='json')
+            if user_id:
+                doc["user_id"] = user_id
             await db["analyses"].update_one(
                 {"analysis_id": analysis.analysis_id},
-                {"$set": analysis.model_dump(mode='json')},
+                {"$set": doc},
                 upsert=True
             )
         except Exception as e:
@@ -486,8 +542,12 @@ async def analyze_image(
     scale_reference_mm: Optional[float] = Form(None),
     scale_reference_key: Optional[str] = Form(None),
     clinical_context_json: Optional[str] = Form(None),
+    current_user: dict = Depends(get_current_user),
 ):
-    """Run the canonical Supervisor Agent workflow for one image/case."""
+    """Run the canonical Supervisor Agent workflow for one image/case.
+    Requires a valid JWT — the authenticated user's ID is attached to the analysis.
+    """
+    _caller_user_id = str(current_user.get("id") or current_user.get("_id", ""))
     analysis_id = str(uuid.uuid4())[:8]
     extension = Path(file.filename or "").suffix.lower()
     if file.content_type not in ALLOWED_MIME_TYPES or extension not in ALLOWED_EXTENSIONS:
@@ -540,7 +600,7 @@ async def analyze_image(
             retryable=True,
             flags=quality.warnings,
         )
-        await _save_analysis(analysis)
+        await _save_analysis(analysis, user_id=_caller_user_id)
         return analysis
 
     if not _models_available():
@@ -587,7 +647,7 @@ async def analyze_image(
             retryable=True,
         )
 
-    await _save_analysis(analysis)
+    await _save_analysis(analysis, user_id=_caller_user_id)
     return analysis
 
 

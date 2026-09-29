@@ -1,18 +1,29 @@
 import { useState } from 'react';
+import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../components/AuthContext';
 
 export default function Login({ onNavigate }) {
   const { login } = useAuth();
+  const navigate = useNavigate();
+
   const [form, setForm] = useState({ email: '', password: '' });
   const [errors, setErrors] = useState({});
   const [apiError, setApiError] = useState('');
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
 
+  const handleNav = (target) => {
+    if (onNavigate) {
+      onNavigate(target);
+    } else {
+      navigate(target.startsWith('/') ? target : `/${target}`);
+    }
+  };
+
   const validate = () => {
     const errs = {};
     if (!form.email.trim()) {
-      errs.email = 'Email is required.';
+      errs.email = 'Email address is required.';
     } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim())) {
       errs.email = 'Please enter a valid email address.';
     }
@@ -32,9 +43,9 @@ export default function Login({ onNavigate }) {
     setLoading(true);
     try {
       await login(form.email.trim(), form.password);
-      // Auth context handles redirect via isAuthenticated change
+      handleNav('/home');
     } catch (err) {
-      setApiError(err.message || 'Invalid email or password.');
+      setApiError(err.message || 'Invalid email address or password.');
     } finally {
       setLoading(false);
     }
@@ -47,119 +58,97 @@ export default function Login({ onNavigate }) {
   };
 
   return (
-    <div className="auth-page">
-      <div className="auth-bg-pattern"></div>
-      <div className="auth-container">
-        {/* Left panel — branding */}
-        <div className="auth-brand-panel">
-          <div className="auth-brand-content">
-            <div className="auth-brand-icon">🔬</div>
-            <h1 className="auth-brand-title">
-              Mela<span>Detect</span> AI
-            </h1>
-            <p className="auth-brand-desc">
-              AI-powered melanoma detection with clinical ABCDE analysis.
-              Get accurate risk assessments and explainable results.
-            </p>
-            <div className="auth-brand-features">
-              <div className="auth-brand-feature">
-                <i className="fas fa-shield-alt"></i>
-                <span>Secure & Private</span>
-              </div>
-              <div className="auth-brand-feature">
-                <i className="fas fa-brain"></i>
-                <span>AI-Powered Analysis</span>
-              </div>
-              <div className="auth-brand-feature">
-                <i className="fas fa-file-medical-alt"></i>
-                <span>Comprehensive Reports</span>
-              </div>
-            </div>
+    <div className="auth-page auth-page-minimal">
+      <div className="auth-card-minimal card">
+        {/* Brand Header */}
+        <div className="auth-minimal-header">
+          <div className="auth-minimal-logo">
+            <i className="fas fa-plus-square"></i>
           </div>
+          <h1 className="auth-minimal-brand">
+            Mela<span>Detect</span> AI
+          </h1>
+          <h2 className="auth-minimal-title">Welcome Back</h2>
+          <p className="auth-minimal-subtitle">Sign in to your skin health account</p>
         </div>
 
-        {/* Right panel — form */}
-        <div className="auth-form-panel">
-          <div className="auth-form-wrapper">
-            <div className="auth-form-header">
-              <h2>Welcome back</h2>
-              <p>Sign in to your account to continue</p>
-            </div>
-
-            {apiError && (
-              <div className="auth-error-banner">
-                <i className="fas fa-exclamation-circle"></i>
-                <span>{apiError}</span>
-              </div>
-            )}
-
-            <form className="auth-form" onSubmit={handleSubmit} noValidate>
-              <div className={`auth-field ${errors.email ? 'has-error' : ''}`}>
-                <label htmlFor="login-email">Email Address</label>
-                <div className="auth-input-wrap">
-                  <i className="fas fa-envelope auth-input-icon"></i>
-                  <input
-                    id="login-email"
-                    type="email"
-                    placeholder="you@example.com"
-                    value={form.email}
-                    onChange={handleChange('email')}
-                    autoComplete="email"
-                    autoFocus
-                  />
-                </div>
-                {errors.email && <span className="auth-field-error">{errors.email}</span>}
-              </div>
-
-              <div className={`auth-field ${errors.password ? 'has-error' : ''}`}>
-                <label htmlFor="login-password">Password</label>
-                <div className="auth-input-wrap">
-                  <i className="fas fa-lock auth-input-icon"></i>
-                  <input
-                    id="login-password"
-                    type={showPassword ? 'text' : 'password'}
-                    placeholder="Enter your password"
-                    value={form.password}
-                    onChange={handleChange('password')}
-                    autoComplete="current-password"
-                  />
-                  <button
-                    type="button"
-                    className="auth-password-toggle"
-                    onClick={() => setShowPassword(!showPassword)}
-                    tabIndex={-1}
-                    aria-label={showPassword ? 'Hide password' : 'Show password'}
-                  >
-                    <i className={`fas ${showPassword ? 'fa-eye-slash' : 'fa-eye'}`}></i>
-                  </button>
-                </div>
-                {errors.password && <span className="auth-field-error">{errors.password}</span>}
-              </div>
-
-              <button type="submit" className="btn btn-primary auth-submit" disabled={loading}>
-                {loading ? (
-                  <>
-                    <span className="auth-spinner"></span>
-                    Signing in…
-                  </>
-                ) : (
-                  <>
-                    <i className="fas fa-sign-in-alt"></i>
-                    Sign In
-                  </>
-                )}
-              </button>
-            </form>
-
-            <div className="auth-footer">
-              <p>
-                Don't have an account?{' '}
-                <button className="auth-link" onClick={() => onNavigate('signup')}>
-                  Create Account
-                </button>
-              </p>
-            </div>
+        {apiError && (
+          <div role="alert" className="auth-error-banner">
+            <i className="fas fa-exclamation-circle"></i>
+            <span>{apiError}</span>
           </div>
+        )}
+
+        <form onSubmit={handleSubmit} noValidate className="auth-minimal-form">
+          <div className="form-group">
+            <label className="form-label" htmlFor="login-email">
+              Email Address
+            </label>
+            <input
+              id="login-email"
+              type="email"
+              className="form-input"
+              placeholder="name@example.com"
+              value={form.email}
+              onChange={handleChange('email')}
+              autoComplete="email"
+              disabled={loading}
+            />
+            {errors.email && <div className="form-error">{errors.email}</div>}
+          </div>
+
+          <div className="form-group">
+            <div className="form-label-row">
+              <label className="form-label" htmlFor="login-password">
+                Password
+              </label>
+              <button
+                type="button"
+                className="btn-link-subtle"
+                onClick={() => setShowPassword(!showPassword)}
+                tabIndex={-1}
+              >
+                {showPassword ? 'Hide' : 'Show'}
+              </button>
+            </div>
+            <input
+              id="login-password"
+              type={showPassword ? 'text' : 'password'}
+              className="form-input"
+              placeholder="Enter your password"
+              value={form.password}
+              onChange={handleChange('password')}
+              autoComplete="current-password"
+              disabled={loading}
+            />
+            {errors.password && <div className="form-error">{errors.password}</div>}
+          </div>
+
+          <button
+            type="submit"
+            className="btn btn-primary btn-block"
+            disabled={loading}
+          >
+            {loading ? (
+              <>
+                <i className="fas fa-spinner fa-spin"></i>
+                <span>Signing In...</span>
+              </>
+            ) : (
+              'Sign In'
+            )}
+          </button>
+        </form>
+
+        <div className="auth-minimal-footer">
+          <span>Don't have an account?</span>{' '}
+          <button
+            type="button"
+            className="btn-link-action"
+            onClick={() => handleNav('/signup')}
+          >
+            Create Account
+          </button>
         </div>
       </div>
     </div>

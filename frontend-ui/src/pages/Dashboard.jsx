@@ -1,157 +1,357 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { useAuth } from '../components/AuthContext';
+import { useToast } from '../components/Toast';
 
-// Educational content for the modals
-const abcdeContent = {
-  A: {
-    title: 'Asymmetry',
-    icon: 'fa-shapes',
-    desc: 'Melanoma is often asymmetrical, which means the shape isn\'t even. If you were to draw a line through the middle, the two halves wouldn\'t match. Benign moles are usually symmetrical.',
-    visualClass: 'vis-asymmetry'
+const abcdeSummary = [
+  {
+    letter: 'A',
+    name: 'Asymmetry',
+    summary: 'One half does not match the other in shape or contour.',
+    detail: 'Benign moles are usually symmetrical. If you draw a line through the center of an atypical mole, the two halves often do not match in outline or surface texture.',
+    clinicalSign: 'Asymmetrical outline, uneven weight distribution',
   },
-  B: {
-    title: 'Border Irregularity',
-    icon: 'fa-border-style',
-    desc: 'Melanoma lesions often have irregular, scalloped or poorly defined borders. Normal moles usually have smooth, even borders.',
-    visualClass: 'vis-border'
+  {
+    letter: 'B',
+    name: 'Border',
+    summary: 'Edges are irregular, scalloped, notched, or poorly defined.',
+    detail: 'A normal mole usually has smooth, even borders. The edges of an early melanoma tend to be uneven, notched, ragged, or blurry.',
+    clinicalSign: 'Scalloped contours, blurred or irregular margin',
   },
-  C: {
-    title: 'Color Variation',
-    icon: 'fa-palette',
-    desc: 'Melanoma lesions often have multiple colors or shades of brown, tan, black, or even white, red, or blue. Benign moles are usually a single shade of brown.',
-    visualClass: 'vis-color'
+  {
+    letter: 'C',
+    name: 'Color',
+    summary: 'Shades vary with mixed brown, black, red, or white tones.',
+    detail: 'Most benign moles are all one shade of brown. An alert sign is the presence of several different colors or uneven color distribution within the same spot.',
+    clinicalSign: 'Multiple chromatic hues, uneven pigment network',
   },
-  D: {
-    title: 'Diameter',
-    icon: 'fa-ruler',
-    desc: 'Melanomas are usually larger than 6mm (about the size of a pencil eraser) when diagnosed, but they can be smaller. It\'s important to monitor any spot that is growing.',
-    visualClass: 'vis-diameter'
+  {
+    letter: 'D',
+    name: 'Diameter',
+    summary: 'Spot is larger than 6 mm across (about pencil eraser size).',
+    detail: 'While early melanomas can be smaller, lesions greater than 6 mm in diameter should be assessed, especially when accompanied by other atypical signs.',
+    clinicalSign: 'Dimension exceeding 6mm or rapid growth',
   },
-  E: {
-    title: 'Evolution',
-    icon: 'fa-sync-alt',
-    desc: 'Any change in size, shape, color, or elevation of a spot on your skin, or any new symptom in it, such as bleeding, itching or crusting, may be a warning sign of melanoma.',
-    visualClass: 'vis-evolution'
-  }
-};
+  {
+    letter: 'E',
+    name: 'Evolution',
+    summary: 'Mole changes in size, shape, color, or symptoms over time.',
+    detail: 'Any change in size, shape, elevation, or new symptoms like itching, crusting, or bleeding is one of the most critical warning signs.',
+    clinicalSign: 'Morphological progression, bleeding, or itching',
+  },
+];
 
-export default function Dashboard({ onNavigate }) {
-  const [activeModal, setActiveModal] = useState(null);
+export default function Home({ onNavigate, onViewReport }) {
+  const { user, token } = useAuth();
+  const navigate = useNavigate();
+  const showToast = useToast();
+  const [analyses, setAnalyses] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [selectedAbcde, setSelectedAbcde] = useState(null);
+
+  const firstName = user?.first_name || 'there';
+
+  const handleNav = (target) => {
+    if (onNavigate) {
+      onNavigate(target);
+    } else {
+      const mapping = {
+        'new-check': '/upload',
+        upload: '/upload',
+        results: '/results',
+        history: '/history',
+        reports: '/history',
+      };
+      navigate(mapping[target] || target);
+    }
+  };
+
+  useEffect(() => {
+    if (!token) {
+      setLoading(false);
+      return;
+    }
+    let isMounted = true;
+    const loadAnalyses = async () => {
+      try {
+        const res = await fetch('/api/analyses', {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (isMounted) setAnalyses(Array.isArray(data) ? data : []);
+        } else if (res.status === 401) {
+          // Token expired — auth context will handle logout
+        }
+      } catch (e) {
+        console.warn('Could not load skin checks:', e);
+      } finally {
+        if (isMounted) setLoading(false);
+      }
+    };
+    loadAnalyses();
+    return () => { isMounted = false; };
+  }, [token]);
+
+  const latestAnalysis = analyses.length > 0 ? analyses[0] : null;
+
+  const handleOpenReport = async (analysis) => {
+    if (!analysis) return;
+    if (onViewReport) {
+      onViewReport(analysis);
+    } else if (onNavigate) {
+      onNavigate('results');
+    } else {
+      navigate(analysis.analysis_id ? `/results/${analysis.analysis_id}` : '/results');
+    }
+  };
+
+  // Format date helper
+  const formatDate = (isoString) => {
+    if (!isoString) return 'Recent';
+    try {
+      const d = new Date(isoString);
+      return d.toLocaleDateString('en-US', {
+        month: 'long',
+        day: 'numeric',
+        year: 'numeric',
+      });
+    } catch {
+      return 'Recent';
+    }
+  };
+
+  // Determine risk presentation
+  const getRiskInfo = (item) => {
+    if (!item) return { label: 'Completed', className: 'badge-low', isHigh: false };
+    const isMelanoma = item.prediction === 'Melanoma';
+    const conf = item.confidence || 0;
+    if (isMelanoma) {
+      if (conf >= 80) return { label: 'High Risk', className: 'badge-high', isHigh: true };
+      return { label: 'Moderate Risk', className: 'badge-moderate', isHigh: false };
+    }
+    if (conf < 65) return { label: 'Review Suggested', className: 'badge-moderate', isHigh: false };
+    return { label: 'Low Risk', className: 'badge-low', isHigh: false };
+  };
+
+  const latestRisk = latestAnalysis ? getRiskInfo(latestAnalysis) : null;
 
   return (
-    <section className="page active" id="page-dashboard">
-      <div className="hero-section">
-        <div className="hero-content">
-          <div className="hero-badge">
-            <span className="dot"></span>
-            AI-Powered Detection
-          </div>
-          <h1 className="hero-title">
-            AI-Powered<br />
-            Melanoma Detection<br />
-            with <span className="highlight">Explainability</span>
-          </h1>
-          <p className="hero-description">
-            Get accurate risk assessment of skin lesions using the clinical ABCDE rule.
-            Upload an image, provide your observations, and receive a comprehensive analysis report.
+    <div className="page-container" id="page-home">
+      {/* Compact & Elegant Hero Section */}
+      <section className="home-hero-card" aria-label="Welcome and quick actions">
+        <div className="home-hero-content">
+          <h1 className="home-hero-title">Hello, {firstName}</h1>
+          <p className="home-hero-subtitle">
+            Understand your skin health with AI-assisted lesion analysis.
           </p>
-          <div className="hero-actions">
-            <button className="btn btn-primary btn-lg" onClick={() => onNavigate('upload')}>
-              <i className="fas fa-upload"></i> Upload Image
+          <div className="home-hero-actions">
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={() => handleNav('new-check')}
+            >
+              <i className="fas fa-camera" aria-hidden="true"></i>
+              <span>Start a Skin Check</span>
             </button>
-            <button className="btn btn-secondary btn-lg" onClick={() => onNavigate('help')}>
-              <i className="fas fa-book-open"></i> Learn More
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => handleNav(latestAnalysis ? 'results' : 'history')}
+            >
+              <i className="fas fa-clipboard-list" aria-hidden="true"></i>
+              <span>View Previous Results</span>
             </button>
           </div>
         </div>
-        
-        {/* Added AI Doctor Trust Badge Area */}
-        <div className="trust-badge-container">
-           <div className="trust-icon-ring">
-             <i className="fas fa-user-md trust-icon"></i>
-           </div>
-           <div className="trust-text">
-             <strong>Clinically Inspired AI</strong>
-             <span>Decision support you can trust</span>
-           </div>
+      </section>
+
+      {/* Your Latest Check Section */}
+      <section className="home-section" aria-labelledby="latest-check-heading">
+        <div className="section-header-compact">
+          <h2 id="latest-check-heading" className="section-title">Your Latest Check</h2>
         </div>
 
-        <div className="hero-visual">
-          <div className="hero-visual-inner">
-            <div className="hero-glow"></div>
-            <div className="hero-card-stack">
-              <button className="hero-float-card card-1 clickable" onClick={() => setActiveModal('A')}>
-                <i className="fas fa-shapes"></i>
-                <span>Asymmetry</span>
-              </button>
-              <button className="hero-float-card card-2 clickable" onClick={() => setActiveModal('B')}>
-                <i className="fas fa-border-style"></i>
-                <span>Border</span>
-              </button>
-              <button className="hero-float-card card-3 clickable" onClick={() => setActiveModal('C')}>
-                <i className="fas fa-palette"></i>
-                <span>Color</span>
-              </button>
-              <button className="hero-float-card card-4 clickable" onClick={() => setActiveModal('D')}>
-                <i className="fas fa-ruler"></i>
-                <span>Diameter</span>
-              </button>
-              <button className="hero-float-card card-5 clickable" onClick={() => setActiveModal('E')}>
-                <i className="fas fa-sync-alt"></i>
-                <span>Evolution</span>
+        {loading ? (
+          <div className="card latest-check-skeleton">
+            <div className="skeleton-line" style={{ width: '40%', height: '18px' }}></div>
+            <div className="skeleton-line" style={{ width: '25%', height: '14px', marginTop: '10px' }}></div>
+          </div>
+        ) : latestAnalysis ? (
+          <div className="card latest-check-card">
+            <div className="latest-check-left">
+              <div className="latest-check-status-badge">
+                <i className="fas fa-check-circle" aria-hidden="true"></i>
+                <span>Completed</span>
+              </div>
+              <div className="latest-check-date">
+                {formatDate(latestAnalysis.timestamp)}
+              </div>
+              <div className="latest-check-assessment">
+                <span className={`risk-badge ${latestRisk?.className}`}>
+                  {latestRisk?.label}
+                </span>
+                {latestAnalysis.confidence !== undefined && (
+                  <span className="latest-check-confidence">
+                    {Math.round(latestAnalysis.confidence)}% confidence
+                  </span>
+                )}
+                <span className="latest-check-ref">
+                  Assessment available
+                </span>
+              </div>
+            </div>
+
+            <div className="latest-check-right">
+              <button
+                type="button"
+                className="btn btn-outline latest-check-btn"
+                onClick={() => handleOpenReport(latestAnalysis)}
+              >
+                <span>View Report</span>
+                <i className="fas fa-arrow-right" aria-hidden="true"></i>
               </button>
             </div>
           </div>
-        </div>
-      </div>
+        ) : (
+          <div className="card latest-check-empty">
+            <div className="latest-check-empty-icon" aria-hidden="true">
+              <i className="fas fa-notes-medical"></i>
+            </div>
+            <div className="latest-check-empty-text">
+              <h3 className="empty-title">No skin checks yet</h3>
+              <p className="empty-subtitle">
+                Start your first skin check to see your results here.
+              </p>
+            </div>
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={() => onNavigate('new-check')}
+            >
+              <i className="fas fa-camera" aria-hidden="true"></i>
+              <span>Start Skin Check</span>
+            </button>
+          </div>
+        )}
+      </section>
 
-      <div className="features-grid">
-        <div className="feature-card interactive" onClick={() => onNavigate('upload')}>
-          <div className="feature-icon teal"><i className="fas fa-brain"></i></div>
-          <h3>ABCDE Analysis <i className="fas fa-arrow-right interactive-arrow"></i></h3>
-          <p>Comprehensive risk assessment based on the clinical ABCDE rule — Asymmetry, Border, Color, Diameter, and Evolution.</p>
+      {/* Understanding Skin Changes: Compact ABCDE Section */}
+      <section className="home-section" aria-labelledby="abcde-section-heading">
+        <div className="section-header-compact">
+          <div>
+            <h2 id="abcde-section-heading" className="section-title">
+              Understanding Skin Changes
+            </h2>
+            <p className="section-subtitle">
+              Learn about the ABCDE signs commonly used when observing skin lesions.
+            </p>
+          </div>
+          <button
+            type="button"
+            className="text-link-btn"
+            onClick={() => onNavigate('help')}
+          >
+            <span>Learn about ABCDE</span>
+            <i className="fas fa-arrow-right" aria-hidden="true"></i>
+          </button>
         </div>
-        <div className="feature-card">
-          <div className="feature-icon blue"><i className="fas fa-microscope"></i></div>
-          <h3>Clinical Insights</h3>
-          <p>Detailed evaluation of each criterion with risk scoring and evidence-based explanations for every observation.</p>
-        </div>
-        <div className="feature-card">
-          <div className="feature-icon purple"><i className="fas fa-lightbulb"></i></div>
-          <h3>Explainable Results</h3>
-          <p>Transparent analysis with clear reasoning behind each risk assessment, helping clinicians make informed decisions.</p>
-        </div>
-        <div className="feature-card interactive" onClick={() => onNavigate('reports')}>
-          <div className="feature-icon amber"><i className="fas fa-history"></i></div>
-          <h3>Analysis History <i className="fas fa-arrow-right interactive-arrow"></i></h3>
-          <p>View your past melanoma analyses and download comprehensive PDF reports with full ABCDE analysis and risk scores.</p>
-        </div>
-      </div>
 
-      {/* ABCDE Visualizer Modal */}
-      {activeModal && (
-        <div className="modal-backdrop" onClick={() => setActiveModal(null)}>
-          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
-            <button className="modal-close" onClick={() => setActiveModal(null)}>
+        <div className="abcde-compact-grid">
+          {abcdeSummary.map((item) => (
+            <div
+              key={item.letter}
+              className="abcde-compact-card"
+              onClick={() => setSelectedAbcde(item)}
+              role="button"
+              tabIndex={0}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  setSelectedAbcde(item);
+                }
+              }}
+              aria-label={`Learn about ${item.name}`}
+            >
+              <div className="abcde-badge-pill" aria-hidden="true">{item.letter}</div>
+              <h3 className="abcde-card-title">{item.name}</h3>
+              <p className="abcde-card-desc">{item.summary}</p>
+              <span className="abcde-card-action">Learn more →</span>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      {/* Subtle Medical Disclaimer */}
+      <footer className="medical-disclaimer-box" role="note">
+        <p>
+          MelaDetect AI provides AI-assisted information and is not a medical diagnosis. If you notice concerning or changing skin lesions, consider consulting a qualified healthcare professional.
+        </p>
+      </footer>
+
+      {/* Educational ABCDE Detail Modal */}
+      {selectedAbcde && (
+        <div
+          className="modal-backdrop"
+          onClick={() => setSelectedAbcde(null)}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="abcde-modal-title"
+        >
+          <div className="modal-card" onClick={(e) => e.stopPropagation()}>
+            <button
+              type="button"
+              className="modal-close-btn"
+              onClick={() => setSelectedAbcde(null)}
+              aria-label="Close dialog"
+            >
               <i className="fas fa-times"></i>
             </button>
-            <div className="modal-header">
-              <div className="modal-icon"><i className={`fas ${abcdeContent[activeModal].icon}`}></i></div>
-              <h2>{abcdeContent[activeModal].title}</h2>
-            </div>
-            
-            {/* CSS-based Visualizer instead of external image */}
-            <div className={`modal-visualizer ${abcdeContent[activeModal].visualClass}`}>
-               <div className="vis-element"></div>
-               <div className="vis-element-secondary"></div>
+
+            <div className="modal-header-row">
+              <div className="modal-letter-badge" aria-hidden="true">
+                {selectedAbcde.letter}
+              </div>
+              <div>
+                <h3 id="abcde-modal-title" className="modal-title">
+                  {selectedAbcde.letter} — {selectedAbcde.name}
+                </h3>
+                <span className="modal-subtitle">{selectedAbcde.clinicalSign}</span>
+              </div>
             </div>
 
-            <p className="modal-desc">{abcdeContent[activeModal].desc}</p>
-            <button className="btn btn-primary" style={{width: '100%', justifyContent: 'center'}} onClick={() => setActiveModal(null)}>
-              Got it
-            </button>
+            <div className="modal-body-content">
+              <p className="modal-text">{selectedAbcde.detail}</p>
+              <div className="modal-tip-box">
+                <i className="fas fa-info-circle text-teal" aria-hidden="true"></i>
+                <span>
+                  Regular monthly self-examinations help spot subtle morphological changes early.
+                </span>
+              </div>
+            </div>
+
+            <div className="modal-actions-row">
+              <button
+                type="button"
+                className="btn btn-outline"
+                onClick={() => setSelectedAbcde(null)}
+              >
+                Close
+              </button>
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={() => {
+                  setSelectedAbcde(null);
+                  onNavigate('new-check');
+                }}
+              >
+                Start a Skin Check
+              </button>
+            </div>
           </div>
         </div>
       )}
-    </section>
+    </div>
   );
 }
