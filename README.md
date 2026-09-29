@@ -1,101 +1,69 @@
-# Phase 1 — Core AI Melanoma Diagnosis Engine
+# Melanoma Detection
 
-An AI-powered melanoma diagnosis system that classifies dermoscopic skin lesion images, segments lesion boundaries, and extracts clinically relevant morphological features.
+This project is an AI-assisted research/decision-support system. It does not
+provide a definitive diagnosis and does not replace a qualified clinician.
 
 ## Architecture
 
-<img width="1536" height="1024" alt="Architecture" src="https://github.com/user-attachments/assets/76787992-de9d-4d51-a7e7-6cab9008c991" />
+![Architecture](assets/architecture.jpg)
 
-## Setup
+The system is driven by a state-based Supervisor with exactly **three**
+top-level agents:
 
-### 1. Install PyTorch with CUDA
+1. `SupervisorAgent` observes `CaseState`, chooses an action, executes it,
+   records a concise execution event, and reassesses.
+2. `VisionAgent` coordinates image validation, preprocessing, SwinV2,
+   SegFormer, OpenCV/scikit-image measurements, calibration, Grad-CAM, and
+   the authoritative image-derived ABCD observations. Swin classification
+   and SegFormer segmentation run as **parallel** branches.
+3. `EvidenceAgent` is the only retrieval path. Its backend is the existing
+   advanced BGE + Qdrant + BM25 + RRF + cross-encoder + parent-expansion +
+   HyDE-capable retrieval stack, with bounded evidence-gap follow-up cycles.
+4. `ReportAgent` creates the validated JSON report and uses the PDF renderer
+   when available.
 
-```bash
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
+Clinical context (evolution history and patient-reported information) is
+handled as an internal utility of the Supervisor workflow. It records
+supplied history, asks for missing evolution/context, and never infers
+patient history from a single image.
+
+`CaseState` (`src/agents/state.py`) is the central contract. It deliberately
+separates model output, raw pixel measurements, calibrated physical
+measurements, supplied clinical context, untrusted evidence, uncertainty, and
+the public execution trace. A pixel measurement is always `{unit: "pixels",
+calibrated: false}`; no millimetre threshold is applied without valid scale
+calibration.
+
+## Flow
+
+```text
+image / supplied context -> Supervisor -> CaseState -> decide next tool
+                                      -> Vision | Evidence
+                                      -> Supervisor -> Report -> JSON / PDF
 ```
 
-### 2. Install Dependencies
-
-```bash
-pip install -r requirements.txt
-```
-
-### 3. Install SegFormer
-
-
-### 4. Download Checkpoints
-
-- **SegFormer**: Download `SegFormer_vit_b.pth` from the [SegFormer repository](https://github.com/bowang-lab/SegFormer) → place in `checkpoints/`
-- **Swin V2**: Train on Kaggle using `notebooks/train_swin_classifier.ipynb` → download `swin_best.pth` → place in `checkpoints/`
-
-### 5. Prepare Dataset
-
-Organize your ISIC dataset in the following structure:
-
-```
-dataset/
-├── classification/
-│   ├── train/
-│   │   ├── melanoma/
-│   │   └── benign/
-│   ├── val/
-│   │   ├── melanoma/
-│   │   └── benign/
-│   └── test/
-│       ├── melanoma/
-│       └── benign/
-└── segmentation/
-    ├── images/
-    └── masks/
-```
+The supervisor is not a fixed phase sequence. For example, low classification
+confidence requests a differential-evidence goal, unavailable evolution
+creates a clinical question, and an evidence gap starts a targeted retrieval
+cycle up to the configured maximum.
 
 ## Usage
 
 ```bash
-# Validate dataset quality
-python main.py validate-data
-
-# Train classifier (or use Kaggle notebook)
-python main.py train
-
-# Evaluate classifier
-python main.py evaluate-cls
-
-# Evaluate segmentation
-python main.py evaluate-seg
-
-# Run full diagnosis on an image
-python main.py diagnose path/to/image.jpg
-
-# Generate Grad-CAM visualization
-python main.py gradcam path/to/image.jpg
+python main.py orchestrate path/to/image.jpg
+python main.py serve
+python -m pytest -q
 ```
 
-## Output
+`POST /api/analyze` is the single canonical API analysis workflow. The
+optional `clinical_context_json` multipart field accepts a JSON object such as
+`{"evolution": {"reported_change": true, "timeframe_months": 3}}`.
+Responses include `execution_trace` and `clinical_questions`; these contain
+operational events only, not private chain-of-thought.
 
-The diagnosis engine produces a `DiagnosisResult` JSON:
+## Setup
 
-```json
-{
-    "prediction": "Melanoma",
-    "confidence": 95.8,
-    "probabilities": {"benign": 0.042, "melanoma": 0.958},
-    "features": {
-        "asymmetry": {"score_label": "High", "score_numeric": 0.42},
-        "border": {"score_label": "Irregular", "score_numeric": 0.68},
-        "color": {"score_label": "Multiple Colors", "score_numeric": 0.75}
-    }
-}
-```
-
-## Project Structure
-
-| Module | Purpose |
-|---|---|
-| `src/data/` | Dataset classes, augmentation, validation |
-| `src/classification/` | Swin V2 model, training, inference |
-| `src/segmentation/` | SegFormer wrapper, lesion locator |
-| `src/features/` | ABC feature extraction with registry pattern |
-| `src/engine/` | Inference pipeline + Core Diagnosis Engine |
-| `src/evaluation/` | Classification and segmentation metrics |
-| `src/explainability/` | Grad-CAM development utility |
+Install dependencies with `pip install -r requirements.txt`, provide the
+configured SwinV2/SegFormer checkpoints, and build the advanced RAG index via
+`python main.py build-rag`. The evidence backend loads lazily, so image-only
+validation does not require Qdrant or an LLM connection.

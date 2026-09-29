@@ -157,7 +157,7 @@ def sanitize_user_input(text: Any, max_length: int = 500) -> str:
 # 4. Agentic RAG Agent (ABCDE Framework — Per-Request Instance)
 # ============================================================
 
-class MelanomaAgent:
+class AdvancedRetrievalBackend:
     """
     Per-request agentic RAG agent.
 
@@ -714,11 +714,13 @@ Return ONLY valid JSON:
             "asymmetry_index": raw_metrics.get("asymmetry_index", 0.0),
             "border_irregularity_score": raw_metrics.get("border_irregularity_score", 0.0),
             "color_variation_score": raw_metrics.get("color_variation_score", 0.0),
-            "diameter_pixels": raw_metrics.get("diameter_pixels", raw_metrics.get("diameter_mm", 0.0)),
+            "diameter_pixels": raw_metrics.get("diameter_pixels", 0.0),
+            "diameter_mm": raw_metrics.get("diameter_mm") if raw_metrics.get("calibration_valid") else None,
+            "calibration_valid": bool(raw_metrics.get("calibration_valid", False)),
             "evolution": raw_metrics.get("evolution", {
-                "reported_change": False,
-                "status": "single_timepoint_capture",
-                "notes": "No prior baseline or longitudinal change reported in current session."
+                "reported_change": None,
+                "status": "unavailable",
+                "notes": "Evolution is unavailable without patient or clinical history."
             })
         }
 
@@ -922,12 +924,12 @@ JSON ONLY.
 # 5. Factory Function (Per-Request Agent Creation)
 # ============================================================
 
-def create_agent() -> MelanomaAgent:
+def create_backend() -> AdvancedRetrievalBackend:
     """
-    Create a fresh MelanomaAgent for each request.
+    Create a fresh advanced retrieval backend for each request.
     Shared resources are already loaded at module level.
     """
-    return MelanomaAgent()
+    return AdvancedRetrievalBackend()
 
 
 # ============================================================
@@ -984,7 +986,7 @@ if __name__ == "__main__":
     logger.info("SENDING ABCDE RESULTS TO AGENTIC RAG (v4.0)")
     logger.info("=" * 70)
 
-    agent = create_agent()
+    agent = create_backend()
 
     report = agent.generate_report(case_data)
 

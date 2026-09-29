@@ -16,6 +16,7 @@ from .base import FeatureResult, get_registered_extractors
 from . import asymmetry  # noqa: F401
 from . import border     # noqa: F401
 from . import color      # noqa: F401
+from . import evolution  # noqa: F401
 
 
 class ABCFeatureExtractor:

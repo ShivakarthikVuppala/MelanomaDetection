@@ -7,12 +7,12 @@ parent-child context expansion, HyDE queries, and multi-hop
 agentic reasoning over your existing knowledge base.
 
 Usage:
-    from rag_pipeline import create_agent
+    from rag_pipeline import create_backend
 
-    agent = create_agent()
-    report = agent.generate_report(case_data)
+    backend = create_backend()
+    passages = backend.hybrid_search("ABCDE melanoma evidence")
 """
 
-from .agent import create_agent, MelanomaAgent
+from .agent import create_backend, AdvancedRetrievalBackend
 
-__all__ = ["create_agent", "MelanomaAgent"]
+__all__ = ["create_backend", "AdvancedRetrievalBackend"]

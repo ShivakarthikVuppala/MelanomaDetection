@@ -18,7 +18,7 @@ The PDF is structured for clinical readability:
     9. Disclaimer
 
 Usage:
-    agent = ReportGenerationAgent(config)
+    renderer = ReportRenderer(config)
     report = agent.generate(diagnosis_result, evidence, explanation)
 """
 
@@ -47,7 +47,7 @@ class ReportResult:
     generated_at: str = field(default_factory=lambda: datetime.now().isoformat())
 
 
-class ReportGenerationAgent:
+class ReportRenderer:
     """
     Phase 4 agent: generates PDF reports and dashboard payloads.
 

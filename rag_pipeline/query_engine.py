@@ -175,14 +175,18 @@ def generate_hyde_queries(
 
     # D — Diameter
     diameter = metrics.get("diameter_pixels", 0)
-    diameter_mm = metrics.get("diameter_mm", 0)
+    # Physical interpretation is legal only with an explicitly validated
+    # calibration. A pixel count is an image observation, not a millimetre
+    # value and must never be compared with the 6 mm ABCDE convention.
+    calibrated = bool(metrics.get("calibration_valid", False))
+    diameter_mm = metrics.get("diameter_mm", 0) if calibrated else None
     if diameter > 0 or (diameter_mm and diameter_mm > 0):
-        size_desc = f"{diameter_mm:.1f}mm" if diameter_mm else f"{diameter:.0f} pixels"
+        size_desc = f"{diameter_mm:.1f}mm (calibrated)" if diameter_mm else f"{diameter:.0f} pixels (uncalibrated)"
         hyde_configs.append({
             "criterion": "diameter",
             "description": (
-                f"Lesion diameter of {size_desc}. "
-                f"{'Exceeds the 6mm diameter threshold in the ABCDE rule.' if (diameter_mm and diameter_mm > 6) or diameter > 150 else 'Below the traditional 6mm threshold but may still warrant evaluation.'}"
+                f"Observed lesion diameter of {size_desc}. "
+                f"{'The calibrated physical measurement is above 6 mm.' if (diameter_mm and diameter_mm > 6) else ('No physical threshold can be applied without calibration.' if not diameter_mm else 'The calibrated physical measurement is at or below 6 mm.') }"
             )
         })
 

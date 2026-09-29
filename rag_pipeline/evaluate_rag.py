@@ -27,7 +27,7 @@ from typing import Dict, Any, List
 
 from dotenv import load_dotenv
 
-from .agent import create_agent
+from .agent import create_backend
 
 # ============================================================
 # Setup
@@ -159,9 +159,9 @@ TEST_CASES = [
                 "color_variation_score": 25.0,
                 "diameter_pixels": 140.0,
                 "evolution": {
-                    "reported_change": False,
-                    "status": "single_timepoint_capture",
-                    "notes": "No temporal history available."
+                    "reported_change": None,
+                    "status": "unavailable",
+                    "notes": "No temporal history was provided."
                 }
             }
         },
@@ -468,7 +468,7 @@ def run_evaluation():
 
         # Run the agent with timing
         start_time = time.perf_counter()
-        agent = create_agent()
+        agent = create_backend()
         report = agent.generate_report(test_case["case_data"])
         wall_time_ms = (time.perf_counter() - start_time) * 1000
 

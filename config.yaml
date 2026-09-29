@@ -109,19 +109,14 @@ paths:
   outputs: outputs/
 
 # ---------------------------------------------------------------------------
-# Phase 2 — Medical Evidence Retrieval
+# Evidence Agent — canonical advanced hybrid retrieval backend
 # ---------------------------------------------------------------------------
-retrieval:
-  embedding_model: BAAI/bge-small-en-v1.5
-  embedding_model_path: models/bge-small-en-v1.5
-  embedding_cache_dir: models/embedding_cache
-  knowledge_base: data/knowledge_base.json
-  qdrant_mode: disk            # memory | disk | docker
-  qdrant_path: data/qdrant_db
-  top_k: 5
+evidence:
+  max_retrieval_cycles: 3
+  backend: rag_pipeline.agent.AdvancedRetrievalBackend
 
 # ---------------------------------------------------------------------------
-# Phase 3 — Explainability
+# Vision tools / evidence-grounded synthesis
 # ---------------------------------------------------------------------------
 explainability:
   mode: llm                    # template | llm
@@ -131,7 +126,7 @@ explainability:
   compute_gradcam: false
 
 # ---------------------------------------------------------------------------
-# Phase 4 — Report Generation
+# Report Agent rendering tool
 # ---------------------------------------------------------------------------
 report:
   output_dir: outputs/reports/
@@ -139,7 +134,7 @@ report:
   include_evidence: true
 
 # ---------------------------------------------------------------------------
-# Orchestrator Agent — Agentic Decision Thresholds
+# Supervisor Agent — Agentic Decision Thresholds
 # ---------------------------------------------------------------------------
 orchestrator:
   classification_confidence_threshold: 70.0
@@ -147,3 +142,4 @@ orchestrator:
   segmentation_max_area_ratio: 0.90
   gradcam_reliability_threshold: 0.30
   max_retry_attempts: 1
+  max_supervisor_steps: 12

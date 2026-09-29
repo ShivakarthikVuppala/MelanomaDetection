@@ -12,7 +12,7 @@ Supports two modes:
   natural language medical reasoning. Requires GEMINI_API_KEY env var.
 
 Usage:
-    agent = ExplainabilityAgent(config)
+    service = EvidenceGroundedExplanationService(config)
     explanation = agent.explain(diagnosis_result, evidence_list)
 """
 
@@ -50,7 +50,7 @@ class ExplanationResult:
     flags: List[str] = field(default_factory=list)
 
 
-class ExplainabilityAgent:
+class EvidenceGroundedExplanationService:
     """
     Phase 3 agent: generates evidence-supported explanations.
 

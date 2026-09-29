@@ -10,13 +10,12 @@ Usage:
     python main.py train              # Train Swin V2 classifier
     python main.py evaluate-cls       # Evaluate classifier on test set
     python main.py evaluate-seg       # Evaluate segmentation
-    python main.py diagnose <image>   # Run Phase 1 diagnosis on an image
-    python main.py orchestrate <image># Run full 4-phase pipeline on an image
+    python main.py diagnose <image>   # Run deterministic vision tools only
+    python main.py orchestrate <image># Run the canonical five-agent workflow
     python main.py gradcam <image>    # Generate Grad-CAM visualization
     python main.py serve              # Start FastAPI server
     python main.py build-rag          # Build Qdrant + BM25 hybrid index
     python main.py evaluate-rag       # Run ABCDE RAG evaluation suite
-    python main.py rag-test <image>   # Image → ABCDE → Agentic RAG report
 """
 
 import sys
@@ -97,27 +96,24 @@ def main():
             datefmt="%H:%M:%S",
         )
 
-        from src.orchestrator.agent import OrchestratorAgent
+        from src.agents.supervisor import SupervisorAgent
 
         image_path = sys.argv[2]
         print(f"\n{'='*60}")
-        print(f"  4-Phase Melanoma Diagnostic Pipeline")
+        print(f"  Three-Agent Melanoma Case Workflow")
         print(f"  Image: {image_path}")
         print(f"{'='*60}\n")
 
-        orchestrator = OrchestratorAgent("config.yaml")
-        state = orchestrator.run(image_path, save_mask=True)
+        supervisor = SupervisorAgent("config.yaml")
+        state = supervisor.run(image_path, save_mask=True)
 
         # Print results summary
         print(f"\n{'='*60}")
         print(f"  Pipeline Status: {state.overall_status.upper()}")
         print(f"{'='*60}")
 
-        for key, phase in state.phases.items():
-            icon = "✓" if phase.status == "completed" else "✗" if phase.status == "failed" else "⊘"
-            print(f"  {icon}  {phase.name}: {phase.status}")
-            if phase.error:
-                print(f"       Error: {phase.error}")
+        for event in state.public_trace():
+            print(f"  • {event['agent']} → {event['action']}: {event['result']} ({event['reason_category']})")
 
         if state.diagnosis_result:
             diag = state.diagnosis_result
@@ -132,9 +128,7 @@ def main():
 
         if state.explanation_result:
             expl = state.explanation_result
-            print(f"\n  Explanation: {expl.summary}")
-            print(f"  Confidence: {expl.confidence_assessment}")
-            print(f"  Grad-CAM Reliable: {expl.grad_cam_reliable}")
+            print(f"\n  Explanation: {expl.get('model_observation', 'unavailable')}")
 
         if state.report_result:
             print(f"\n  Report PDF: {state.report_result.pdf_path or 'not generated'}")
@@ -237,53 +231,23 @@ def main():
 
         image_path = sys.argv[2]
         print(f"\n{'='*60}")
-        print(f"  Agentic RAG v4 — Image → ABCDE → Evidence Report")
+        print(f"  Supervisor Agent — Image → Evidence-Grounded Report")
         print(f"  Image: {image_path}")
         print(f"{'='*60}\n")
 
-        # Phase 1: Run the existing diagnosis engine
-        from src.engine.engine import CoreDiagnosisEngine
-        engine = CoreDiagnosisEngine("config.yaml")
-        diag = engine.diagnose(image_path, save_mask=False)
-
-        # Map to ABCDE case data
-        case_data = {
-            "case_id": f"CLI-TEST-001",
-            "prediction": diag.diagnosis.prediction,
-            "confidence": float(diag.diagnosis.confidence),
-            "abcde_metrics": {
-                "asymmetry_index": diag.clinical_features.get("asymmetry", None)
-                    and diag.clinical_features["asymmetry"].score_numeric or 0.0,
-                "border_irregularity_score": diag.clinical_features.get("border", None)
-                    and diag.clinical_features["border"].score_numeric or 0.0,
-                "color_variation_score": diag.clinical_features.get("color", None)
-                    and diag.clinical_features["color"].score_numeric or 0.0,
-                "diameter_pixels": diag.clinical_features.get("diameter", None)
-                    and diag.clinical_features["diameter"].score_numeric or 0.0,
-                "evolution": {
-                    "reported_change": False,
-                    "status": "single_timepoint_capture",
-                    "notes": "Static image — evolution requires clinical history."
-                }
-            }
-        }
-
-        print(f"\nDiagnosis: {diag.diagnosis.prediction} ({diag.diagnosis.confidence:.1f}%)")
-        print(f"\nSending to Agentic RAG v4...\n")
-
-        # Phase 2: Run v4 RAG agent
-        from rag_pipeline import create_agent
-        agent = create_agent()
-        report = agent.generate_report(case_data)
+        # Compatibility command: it now invokes the same supervisor route.
+        from src.agents.supervisor import SupervisorAgent
+        state = SupervisorAgent("config.yaml").run(image_path)
+        report = state.final_report or {"status": state.status, "flags": state.flags}
 
         # Display
         print(f"\n{'='*60}")
-        print("ABCDE RAG REPORT")
+        print("ABCDE CASE REPORT")
         print(f"{'='*60}")
         print(json.dumps(report, indent=2, default=str))
 
         # Save
-        output_path = Path("outputs") / f"{Path(image_path).stem}_rag_report.json"
+        output_path = Path("outputs") / f"{Path(image_path).stem}_case_report.json"
         output_path.parent.mkdir(parents=True, exist_ok=True)
         with open(output_path, "w") as f:
             json.dump(report, f, indent=2, default=str)

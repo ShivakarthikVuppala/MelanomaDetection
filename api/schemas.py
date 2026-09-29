@@ -169,6 +169,8 @@ class AnalysisResponse(BaseModel):
     error_code: Optional[str] = None
     message: Optional[str] = None
     retryable: bool = False
+    execution_trace: List[Dict[str, Any]] = Field(default_factory=list)
+    clinical_questions: List[Dict[str, str]] = Field(default_factory=list)
 
 
 class AnalysisListItem(BaseModel):
