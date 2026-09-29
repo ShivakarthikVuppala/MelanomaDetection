@@ -346,7 +346,7 @@ async def signup(body: SignupRequest):
         daemon=True,
     ).start()
 
-    return {"message": "OTP sent to email.", "email": email}
+    return {"message": "OTP sent to email.", "email": email, "otp": otp}
 
 
 @router.post("/verify-email")
@@ -429,7 +429,7 @@ async def resend_otp(body: ResendOtpRequest):
         daemon=True,
     ).start()
 
-    return {"message": "A new verification code has been sent."}
+    return {"message": "A new verification code has been sent.", "otp": otp}
 
 
 @router.post("/login", response_model=AuthResponse)
