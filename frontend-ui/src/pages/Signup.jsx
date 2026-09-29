@@ -1,15 +1,16 @@
-import { useState, useRef } from 'react';
+import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../components/AuthContext';
 import { useToast } from '../components/Toast';
 
 export default function Signup({ onNavigate }) {
   const { signup, verifyEmail, resendOtp } = useAuth();
   const showToast = useToast();
-  
-  // View state: 'form', 'verify'
-  const [step, setStep] = useState('form');
+  const navigate = useNavigate();
+
+  const [step, setStep] = useState('form'); // 'form' | 'verify'
   const [registeredEmail, setRegisteredEmail] = useState('');
-  
+
   const [form, setForm] = useState({
     first_name: '',
     last_name: '',
@@ -18,19 +19,23 @@ export default function Signup({ onNavigate }) {
     password: '',
     confirm_password: '',
   });
-  
-  // OTP state
+
   const [otp, setOtp] = useState('');
   const [otpError, setOtpError] = useState('');
-  
   const [errors, setErrors] = useState({});
   const [apiError, setApiError] = useState('');
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
-  
-  // Duplicate email modal
   const [showDuplicateModal, setShowDuplicateModal] = useState(false);
+
+  const handleNav = (target) => {
+    if (onNavigate) {
+      onNavigate(target);
+    } else {
+      navigate(target.startsWith('/') ? target : `/${target}`);
+    }
+  };
 
   const validate = () => {
     const errs = {};
@@ -80,11 +85,11 @@ export default function Signup({ onNavigate }) {
         email: form.email.trim(),
         password: form.password,
       });
-      setRegisteredEmail(data.email);
+      setRegisteredEmail(data.email || form.email.trim());
       setStep('verify');
       showToast('Verification code sent!', 'success');
     } catch (err) {
-      if (err.message.includes('already exists') || err.message.includes('Already Used')) {
+      if (err.message?.includes('already exists') || err.message?.includes('Already Used')) {
         setShowDuplicateModal(true);
       } else {
         setApiError(err.message || 'Registration failed. Please try again.');
@@ -98,15 +103,15 @@ export default function Signup({ onNavigate }) {
     e.preventDefault();
     setOtpError('');
     if (otp.length !== 6) {
-      setOtpError('Please enter a 6-digit code.');
+      setOtpError('Please enter a valid 6-digit code.');
       return;
     }
 
     setLoading(true);
     try {
       await verifyEmail(registeredEmail, otp);
-      showToast('Email verified successfully! Please sign in.', 'success');
-      onNavigate('login');
+      showToast('Email verified successfully! You can now sign in.', 'success');
+      handleNav('/login');
     } catch (err) {
       setOtpError(err.message || 'Invalid verification code.');
     } finally {
@@ -134,316 +139,287 @@ export default function Signup({ onNavigate }) {
     if (apiError) setApiError('');
   };
 
-  const maskEmail = (email) => {
-    if (!email) return '';
-    const [name, domain] = email.split('@');
-    return `${name.charAt(0)}***@${domain}`;
-  };
-
   return (
-    <div className="auth-page">
-      <div className="auth-bg-pattern"></div>
-      <div className="auth-container">
-        
-        {/* Duplicate Email Modal */}
-        {showDuplicateModal && (
-          <div style={{
-            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 1000,
-            display: 'flex', alignItems: 'center', justifyContent: 'center'
-          }}>
-            <div style={{
-              background: 'var(--bg-card)', padding: '32px', borderRadius: 'var(--radius-lg)',
-              width: '100%', maxWidth: '400px', boxShadow: 'var(--shadow-xl)',
-              animation: 'slideUp 0.3s ease-out'
-            }}>
-              <h3 style={{ fontSize: '20px', fontWeight: '700', marginBottom: '16px', color: 'var(--text-primary)' }}>
-                Email Already Used
-              </h3>
-              <p style={{ fontSize: '15px', color: 'var(--text-secondary)', marginBottom: '24px', lineHeight: '1.5' }}>
-                This email is already associated with an account.
-                <br/><br/>
-                Please sign in instead.
-              </p>
-              <div style={{ display: 'flex', gap: '12px' }}>
-                <button 
-                  className="btn btn-outline" 
-                  onClick={() => setShowDuplicateModal(false)}
-                  style={{ flex: 1 }}
-                >
-                  Cancel
-                </button>
-                <button 
-                  className="btn btn-primary" 
-                  onClick={() => onNavigate('login')}
-                  style={{ flex: 1, justifyContent: 'center' }}
-                >
-                  Sign In
-                </button>
+    <div className="auth-page auth-page-minimal">
+      <div className="auth-card-minimal card" style={{ maxWidth: '480px' }}>
+        {/* Brand Header */}
+        <div className="auth-minimal-header">
+          <div className="auth-minimal-logo">
+            <i className="fas fa-plus-square"></i>
+          </div>
+          <h1 className="auth-minimal-brand">
+            Mela<span>Detect</span> AI
+          </h1>
+          <h2 className="auth-minimal-title">
+            {step === 'form' ? 'Create Account' : 'Verify Email'}
+          </h2>
+          <p className="auth-minimal-subtitle">
+            {step === 'form'
+              ? 'Join to track and evaluate your skin health'
+              : `Enter the 6-digit code sent to ${registeredEmail}`}
+          </p>
+        </div>
+
+        {apiError && (
+          <div role="alert" className="auth-error-banner">
+            <i className="fas fa-exclamation-circle"></i>
+            <span>{apiError}</span>
+          </div>
+        )}
+
+        {step === 'form' ? (
+          <form onSubmit={handleSubmit} noValidate className="auth-minimal-form">
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+              <div className="form-group">
+                <label className="form-label" htmlFor="signup-first-name">
+                  First Name
+                </label>
+                <input
+                  id="signup-first-name"
+                  type="text"
+                  className="form-input"
+                  placeholder="Jane"
+                  value={form.first_name}
+                  onChange={handleChange('first_name')}
+                  disabled={loading}
+                />
+                {errors.first_name && <div className="form-error">{errors.first_name}</div>}
               </div>
+
+              <div className="form-group">
+                <label className="form-label" htmlFor="signup-last-name">
+                  Last Name
+                </label>
+                <input
+                  id="signup-last-name"
+                  type="text"
+                  className="form-input"
+                  placeholder="Doe"
+                  value={form.last_name}
+                  onChange={handleChange('last_name')}
+                  disabled={loading}
+                />
+                {errors.last_name && <div className="form-error">{errors.last_name}</div>}
+              </div>
+            </div>
+
+            <div className="form-group">
+              <label className="form-label" htmlFor="signup-email">
+                Email Address
+              </label>
+              <input
+                id="signup-email"
+                type="email"
+                className="form-input"
+                placeholder="name@example.com"
+                value={form.email}
+                onChange={handleChange('email')}
+                autoComplete="email"
+                disabled={loading}
+              />
+              {errors.email && <div className="form-error">{errors.email}</div>}
+            </div>
+
+            <div className="form-group">
+              <label className="form-label" htmlFor="signup-phone">
+                Phone Number
+              </label>
+              <input
+                id="signup-phone"
+                type="tel"
+                className="form-input"
+                placeholder="+1 (555) 000-0000"
+                value={form.phone}
+                onChange={handleChange('phone')}
+                disabled={loading}
+              />
+              {errors.phone && <div className="form-error">{errors.phone}</div>}
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+              <div className="form-group">
+                <div className="form-label-row">
+                  <label className="form-label" htmlFor="signup-password">
+                    Password
+                  </label>
+                  <button
+                    type="button"
+                    className="btn-link-subtle"
+                    onClick={() => setShowPassword(!showPassword)}
+                    tabIndex={-1}
+                  >
+                    {showPassword ? 'Hide' : 'Show'}
+                  </button>
+                </div>
+                <input
+                  id="signup-password"
+                  type={showPassword ? 'text' : 'password'}
+                  className="form-input"
+                  placeholder="6+ chars"
+                  value={form.password}
+                  onChange={handleChange('password')}
+                  disabled={loading}
+                />
+                {errors.password && <div className="form-error">{errors.password}</div>}
+              </div>
+
+              <div className="form-group">
+                <div className="form-label-row">
+                  <label className="form-label" htmlFor="signup-confirm">
+                    Confirm
+                  </label>
+                  <button
+                    type="button"
+                    className="btn-link-subtle"
+                    onClick={() => setShowConfirm(!showConfirm)}
+                    tabIndex={-1}
+                  >
+                    {showConfirm ? 'Hide' : 'Show'}
+                  </button>
+                </div>
+                <input
+                  id="signup-confirm"
+                  type={showConfirm ? 'text' : 'password'}
+                  className="form-input"
+                  placeholder="Re-enter"
+                  value={form.confirm_password}
+                  onChange={handleChange('confirm_password')}
+                  disabled={loading}
+                />
+                {errors.confirm_password && (
+                  <div className="form-error">{errors.confirm_password}</div>
+                )}
+              </div>
+            </div>
+
+            <button
+              type="submit"
+              className="btn btn-primary btn-block"
+              disabled={loading}
+              style={{ marginTop: '8px' }}
+            >
+              {loading ? (
+                <>
+                  <i className="fas fa-spinner fa-spin"></i>
+                  <span>Creating Account...</span>
+                </>
+              ) : (
+                'Create Account'
+              )}
+            </button>
+          </form>
+        ) : (
+          /* Minimal OTP View */
+          <div className="auth-minimal-form">
+            {otpError && (
+              <div role="alert" className="auth-error-banner">
+                <i className="fas fa-exclamation-circle"></i>
+                <span>{otpError}</span>
+              </div>
+            )}
+
+            <form onSubmit={handleVerify}>
+              <div className="form-group" style={{ textAlign: 'center' }}>
+                <label className="form-label" style={{ marginBottom: '8px' }}>
+                  6-Digit Verification Code
+                </label>
+                <input
+                  type="text"
+                  maxLength={6}
+                  className="form-input"
+                  style={{
+                    fontSize: '22px',
+                    letterSpacing: '8px',
+                    textAlign: 'center',
+                    fontWeight: 600,
+                  }}
+                  placeholder="123456"
+                  value={otp}
+                  onChange={(e) => setOtp(e.target.value.replace(/\D/g, ''))}
+                  autoFocus
+                />
+              </div>
+
+              <button
+                type="submit"
+                className="btn btn-primary btn-block"
+                disabled={loading || otp.length !== 6}
+                style={{ marginTop: '14px' }}
+              >
+                {loading ? 'Verifying...' : 'Verify & Continue'}
+              </button>
+            </form>
+
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                marginTop: '18px',
+                fontSize: '13px',
+              }}
+            >
+              <button
+                type="button"
+                className="btn-link-action"
+                style={{ color: 'var(--text-secondary)' }}
+                onClick={() => setStep('form')}
+              >
+                ← Back
+              </button>
+              <button
+                type="button"
+                className="btn-link-action"
+                onClick={handleResend}
+                disabled={loading}
+              >
+                Resend Code
+              </button>
             </div>
           </div>
         )}
 
-        {/* Left panel — branding */}
-        <div className="auth-brand-panel">
-          <div className="auth-brand-content">
-            <div className="auth-brand-icon">🔬</div>
-            <h1 className="auth-brand-title">
-              Mela<span>Detect</span> AI
-            </h1>
-            <p className="auth-brand-desc">
-              Create your account to access AI-powered melanoma risk assessment
-              with clinical ABCDE analysis and comprehensive reports.
+        <div className="auth-minimal-footer">
+          <span>Already have an account?</span>{' '}
+          <button
+            type="button"
+            className="btn-link-action"
+            onClick={() => handleNav('/login')}
+          >
+            Sign In
+          </button>
+        </div>
+      </div>
+
+      {/* Duplicate Account Modal */}
+      {showDuplicateModal && (
+        <div className="modal-backdrop" onClick={() => setShowDuplicateModal(false)}>
+          <div className="card modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '400px', padding: '24px' }}>
+            <h3 style={{ fontSize: '18px', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '8px' }}>
+              Account Already Exists
+            </h3>
+            <p style={{ fontSize: '14px', color: 'var(--text-secondary)', lineHeight: 1.5, marginBottom: '20px' }}>
+              An account with this email is already registered in MelaDetect AI. Would you like to sign in instead?
             </p>
-            <div className="auth-brand-features">
-              <div className="auth-brand-feature">
-                <i className="fas fa-user-shield"></i>
-                <span>Your data stays secure</span>
-              </div>
-              <div className="auth-brand-feature">
-                <i className="fas fa-history"></i>
-                <span>Track analysis history</span>
-              </div>
-              <div className="auth-brand-feature">
-                <i className="fas fa-download"></i>
-                <span>Export PDF reports</span>
-              </div>
+            <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
+              <button
+                type="button"
+                className="btn btn-outline"
+                onClick={() => setShowDuplicateModal(false)}
+              >
+                Dismiss
+              </button>
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={() => handleNav('/login')}
+              >
+                Go to Sign In
+              </button>
             </div>
           </div>
         </div>
-
-        {/* Right panel — form */}
-        <div className="auth-form-panel">
-          <div className="auth-form-wrapper">
-            
-            {step === 'form' ? (
-              <>
-                <div className="auth-form-header">
-                  <h2>Create Account</h2>
-                  <p>Register to start using MelaDetect AI</p>
-                </div>
-
-                {apiError && (
-                  <div className="auth-error-banner">
-                    <i className="fas fa-exclamation-circle"></i>
-                    <span>{apiError}</span>
-                  </div>
-                )}
-
-                <form className="auth-form" onSubmit={handleSubmit} noValidate>
-                  <div className="auth-field-row">
-                    <div className={`auth-field ${errors.first_name ? 'has-error' : ''}`}>
-                      <label htmlFor="signup-first-name">First Name</label>
-                      <div className="auth-input-wrap">
-                        <i className="fas fa-user auth-input-icon"></i>
-                        <input
-                          id="signup-first-name"
-                          type="text"
-                          placeholder="First name"
-                          value={form.first_name}
-                          onChange={handleChange('first_name')}
-                          autoComplete="given-name"
-                          autoFocus
-                        />
-                      </div>
-                      {errors.first_name && <span className="auth-field-error">{errors.first_name}</span>}
-                    </div>
-
-                    <div className={`auth-field ${errors.last_name ? 'has-error' : ''}`}>
-                      <label htmlFor="signup-last-name">Last Name</label>
-                      <div className="auth-input-wrap">
-                        <i className="fas fa-user auth-input-icon"></i>
-                        <input
-                          id="signup-last-name"
-                          type="text"
-                          placeholder="Last name"
-                          value={form.last_name}
-                          onChange={handleChange('last_name')}
-                          autoComplete="family-name"
-                        />
-                      </div>
-                      {errors.last_name && <span className="auth-field-error">{errors.last_name}</span>}
-                    </div>
-                  </div>
-
-                  <div className={`auth-field ${errors.phone ? 'has-error' : ''}`}>
-                    <label htmlFor="signup-phone">Phone Number</label>
-                    <div className="auth-input-wrap">
-                      <i className="fas fa-phone auth-input-icon"></i>
-                      <input
-                        id="signup-phone"
-                        type="tel"
-                        placeholder="+1 (555) 123-4567"
-                        value={form.phone}
-                        onChange={handleChange('phone')}
-                        autoComplete="tel"
-                      />
-                    </div>
-                    {errors.phone && <span className="auth-field-error">{errors.phone}</span>}
-                  </div>
-
-                  <div className={`auth-field ${errors.email ? 'has-error' : ''}`}>
-                    <label htmlFor="signup-email">Email Address</label>
-                    <div className="auth-input-wrap">
-                      <i className="fas fa-envelope auth-input-icon"></i>
-                      <input
-                        id="signup-email"
-                        type="email"
-                        placeholder="you@example.com"
-                        value={form.email}
-                        onChange={handleChange('email')}
-                        autoComplete="email"
-                      />
-                    </div>
-                    {errors.email && <span className="auth-field-error">{errors.email}</span>}
-                  </div>
-
-                  <div className="auth-field-row">
-                    <div className={`auth-field ${errors.password ? 'has-error' : ''}`}>
-                      <label htmlFor="signup-password">Password</label>
-                      <div className="auth-input-wrap">
-                        <i className="fas fa-lock auth-input-icon"></i>
-                        <input
-                          id="signup-password"
-                          type={showPassword ? 'text' : 'password'}
-                          placeholder="Min. 6 characters"
-                          value={form.password}
-                          onChange={handleChange('password')}
-                          autoComplete="new-password"
-                        />
-                        <button
-                          type="button"
-                          className="auth-password-toggle"
-                          onClick={() => setShowPassword(!showPassword)}
-                          tabIndex={-1}
-                        >
-                          <i className={`fas ${showPassword ? 'fa-eye-slash' : 'fa-eye'}`}></i>
-                        </button>
-                      </div>
-                      {errors.password && <span className="auth-field-error">{errors.password}</span>}
-                    </div>
-
-                    <div className={`auth-field ${errors.confirm_password ? 'has-error' : ''}`}>
-                      <label htmlFor="signup-confirm">Confirm Password</label>
-                      <div className="auth-input-wrap">
-                        <i className="fas fa-lock auth-input-icon"></i>
-                        <input
-                          id="signup-confirm"
-                          type={showConfirm ? 'text' : 'password'}
-                          placeholder="Re-enter password"
-                          value={form.confirm_password}
-                          onChange={handleChange('confirm_password')}
-                          autoComplete="new-password"
-                        />
-                        <button
-                          type="button"
-                          className="auth-password-toggle"
-                          onClick={() => setShowConfirm(!showConfirm)}
-                          tabIndex={-1}
-                        >
-                          <i className={`fas ${showConfirm ? 'fa-eye-slash' : 'fa-eye'}`}></i>
-                        </button>
-                      </div>
-                      {errors.confirm_password && (
-                        <span className="auth-field-error">{errors.confirm_password}</span>
-                      )}
-                    </div>
-                  </div>
-
-                  <button type="submit" className="btn btn-primary auth-submit" disabled={loading}>
-                    {loading ? (
-                      <>
-                        <span className="auth-spinner"></span>
-                        Creating Account…
-                      </>
-                    ) : (
-                      <>
-                        <i className="fas fa-user-plus"></i>
-                        Create Account
-                      </>
-                    )}
-                  </button>
-                </form>
-
-                <div className="auth-footer">
-                  <p>
-                    Already have an account?{' '}
-                    <button className="auth-link" onClick={() => onNavigate('login')}>
-                      Sign In
-                    </button>
-                  </p>
-                </div>
-              </>
-            ) : (
-              <>
-                <div className="auth-form-header">
-                  <h2>Verify Your Email</h2>
-                  <p>
-                    We sent a 6-digit verification code to:<br/>
-                    <strong style={{ color: 'var(--text-primary)' }}>{maskEmail(registeredEmail)}</strong>
-                  </p>
-                </div>
-
-                {otpError && (
-                  <div className="auth-error-banner" style={{ marginBottom: '24px' }}>
-                    <i className="fas fa-exclamation-circle"></i>
-                    <span>{otpError}</span>
-                  </div>
-                )}
-
-                <form className="auth-form" onSubmit={handleVerify}>
-                  <div className="auth-field">
-                    <div className="auth-input-wrap">
-                      <i className="fas fa-key auth-input-icon"></i>
-                      <input
-                        type="text"
-                        maxLength="6"
-                        placeholder="Enter 6-digit code"
-                        value={otp}
-                        onChange={(e) => {
-                          setOtp(e.target.value.replace(/\D/g, ''));
-                          setOtpError('');
-                        }}
-                        style={{ fontSize: '18px', letterSpacing: '4px', textAlign: 'center', paddingLeft: '40px' }}
-                        autoFocus
-                      />
-                    </div>
-                  </div>
-
-                  <button type="submit" className="btn btn-primary auth-submit" disabled={loading || otp.length !== 6}>
-                    {loading ? (
-                      <>
-                        <span className="auth-spinner"></span>
-                        Verifying…
-                      </>
-                    ) : (
-                      <>
-                        <i className="fas fa-check-circle"></i>
-                        Verify Email
-                      </>
-                    )}
-                  </button>
-                </form>
-
-                <div className="auth-footer" style={{ marginTop: '24px' }}>
-                  <p style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                    <span>Didn't receive the code?</span>
-                    <button 
-                      className="btn btn-outline" 
-                      onClick={handleResend}
-                      disabled={loading}
-                      style={{ margin: '0 auto' }}
-                    >
-                      Resend Code
-                    </button>
-                  </p>
-                </div>
-              </>
-            )}
-
-          </div>
-        </div>
-      </div>
+      )}
     </div>
   );
 }

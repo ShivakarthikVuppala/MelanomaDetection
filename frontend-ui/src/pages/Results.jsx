@@ -1,292 +1,694 @@
+import { useState, useEffect } from 'react';
+import { useParams, useNavigate } from 'react-router-dom';
 import { useToast } from '../components/Toast';
+import { useAuth } from '../components/AuthContext';
 
 export default function Results({ analysisResult, onNavigate }) {
+  const { reportId } = useParams();
+  const { token } = useAuth();
+  const navigate = useNavigate();
   const showToast = useToast();
 
-  if (!analysisResult) {
+  const [currentResult, setCurrentResult] = useState(analysisResult || null);
+  const [loading, setLoading] = useState(!analysisResult);
+  const [activeImageTab, setActiveImageTab] = useState('original');
+  const [zoomModal, setZoomModal] = useState(false);
+  const [downloading, setDownloading] = useState(false);
+
+  const handleNav = (target) => {
+    if (onNavigate) {
+      onNavigate(target);
+    } else {
+      const mapping = {
+        'new-check': '/upload',
+        upload: '/upload',
+        history: '/history',
+        reports: '/history',
+      };
+      navigate(mapping[target] || target);
+    }
+  };
+
+  useEffect(() => {
+    if (analysisResult) {
+      setCurrentResult(analysisResult);
+      setLoading(false);
+      return;
+    }
+
+    if (!token) {
+      setLoading(false);
+      return;
+    }
+
+    let isMounted = true;
+    setLoading(true);
+
+    const targetUrl = reportId ? `/api/analyses/${reportId}` : '/api/analyses';
+
+    fetch(targetUrl, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (!isMounted) return;
+        if (Array.isArray(data)) {
+          if (data.length > 0) {
+            return fetch(`/api/analyses/${data[0].analysis_id}`, {
+              headers: { Authorization: `Bearer ${token}` },
+            })
+              .then((r) => (r.ok ? r.json() : data[0]))
+              .then((full) => {
+                if (isMounted) setCurrentResult(full);
+              });
+          } else {
+            setCurrentResult(null);
+          }
+        } else {
+          setCurrentResult(data);
+        }
+      })
+      .catch((e) => {
+        console.warn('Failed to fetch analysis:', e);
+      })
+      .finally(() => {
+        if (isMounted) setLoading(false);
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [analysisResult, reportId, token]);
+
+  if (loading) {
     return (
-      <section className="page active" id="page-results">
-        <div className="empty-state">
-          <div className="empty-state-icon"><i className="fas fa-chart-bar"></i></div>
-          <h2>No Results Yet</h2>
-          <p>Upload an image and run the pipeline to see results here.</p>
-          <button className="btn btn-primary" onClick={() => onNavigate('upload')}>
-            <i className="fas fa-upload"></i> Upload Image
-          </button>
+      <div className="page-container" id="page-report-loading">
+        <div className="card report-empty-card" style={{ padding: '60px 24px', textAlign: 'center' }}>
+          <div className="loading-spinner" style={{ margin: '0 auto 16px', fontSize: '28px', color: 'var(--primary)' }}>
+            <i className="fas fa-spinner fa-spin"></i>
+          </div>
+          <h2 style={{ fontSize: '18px', fontWeight: 600, color: 'var(--text-primary)' }}>Loading Skin Check Report...</h2>
+          <p style={{ color: 'var(--text-secondary)', fontSize: '14px', marginTop: '6px' }}>Fetching analysis metrics and dermatological assessment.</p>
         </div>
-      </section>
+      </div>
     );
   }
 
-  if (analysisResult.status !== 'completed' || !analysisResult.diagnosis) {
+  if (!currentResult) {
     return (
-      <section className="page active" id="page-results">
-        <div className="empty-state" style={{ color: 'var(--danger)' }}>
-          <div className="empty-state-icon" style={{ color: 'inherit' }}><i className="fas fa-exclamation-triangle"></i></div>
-          <h2>{analysisResult.status === 'image_quality_insufficient' ? 'Image quality insufficient' : 'Analysis could not be completed'}</h2>
-          <p>{analysisResult.message || 'Please try again with a clearer image.'}</p>
-          <div style={{ marginTop: '16px', padding: '16px', background: 'var(--surface-light)', borderRadius: '8px', color: 'var(--text-light)' }}>
-            {analysisResult.error_code && <div>{analysisResult.error_code}</div>}
+      <div className="page-container" id="page-report-empty">
+        <div className="card report-empty-card">
+          <div className="report-empty-icon" aria-hidden="true">
+            <i className="fas fa-file-waveform"></i>
           </div>
-          <button className="btn btn-primary mt-24" onClick={() => onNavigate('upload')}>
-            <i className="fas fa-redo"></i> Try Again
+          <h2 className="report-empty-title">No Skin Check Selected</h2>
+          <p className="report-empty-subtitle">
+            Start a new skin check or select a past assessment from your history to view its report.
+          </p>
+          <div className="report-empty-actions">
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={() => handleNav('new-check')}
+            >
+              <i className="fas fa-camera" aria-hidden="true"></i>
+              <span>Start a Skin Check</span>
+            </button>
+            <button
+              type="button"
+              className="btn btn-outline"
+              onClick={() => handleNav('history')}
+            >
+              <i className="fas fa-history" aria-hidden="true"></i>
+              <span>View History</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Handle insufficient quality or incomplete result
+  if (currentResult.status !== 'completed' || !currentResult.diagnosis) {
+    return (
+      <div className="page-container" id="page-report-error">
+        <div className="card report-error-card">
+          <div className="report-error-icon" aria-hidden="true">
+            <i className="fas fa-triangle-exclamation"></i>
+          </div>
+          <h2 className="report-error-title">
+            {currentResult.status === 'image_quality_insufficient'
+              ? 'Image Quality Needs Adjustment'
+              : 'Analysis Could Not Be Completed'}
+          </h2>
+          <p className="report-error-subtitle">
+            {currentResult.message ||
+              'The uploaded photo could not be clearly analyzed. For best results, use good natural lighting and make sure the lesion is sharp and centered.'}
+          </p>
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={() => handleNav('new-check')}
+          >
+            <i className="fas fa-redo" aria-hidden="true"></i>
+            <span>Try With Another Photo</span>
           </button>
         </div>
-      </section>
+      </div>
     );
   }
 
   const {
     diagnosis,
-    evidence,
     explanation,
     report,
-    original_image_url
-  } = analysisResult;
+    original_image_url,
+    analysis_id,
+    timestamp,
+    _customContext,
+  } = currentResult;
 
-  const isMelanoma = diagnosis?.diagnosis?.prediction === 'Melanoma';
-  const melanomaProbability = Number(
+  const pred = diagnosis?.diagnosis?.prediction || 'Benign';
+  const isMelanoma = pred === 'Melanoma';
+  const confidence = Math.round(diagnosis?.diagnosis?.confidence || 0);
+  const melanomaProb = Number(
     diagnosis?.melanoma_probability ?? diagnosis?.probabilities?.melanoma ?? 0
   );
-  const focusNeedsReview = diagnosis?.explainability?.attention_inside_lesion != null
-    && diagnosis.explainability.attention_inside_lesion < 0.30;
-  const lowProbabilityFlag = isMelanoma && melanomaProbability < 0.50;
-  const riskColor = focusNeedsReview || lowProbabilityFlag
-    ? 'var(--accent-amber)'
-    : isMelanoma ? 'var(--danger)' : 'var(--success)';
-  const riskLevel = focusNeedsReview
-    ? 'Focus review required'
-    : lowProbabilityFlag
-      ? 'Screening flag below 50%'
-      : isMelanoma ? 'Screening flag' : 'Below melanoma threshold';
 
-  const handleDownloadPDF = () => {
-    if (report?.pdf_url) {
-      const link = document.createElement('a');
-      link.href = report.pdf_url;
-      link.download = `Melanoma_Report_${analysisResult.analysis_id.substring(0, 8)}.pdf`;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
+  // Semantic Risk Assessment Tiering
+  let riskAssessment = 'Low Risk';
+  let riskBadgeClass = 'badge-low';
+  let riskSummaryText =
+    'The features analyzed align with typical benign dermatological characteristics. Continue normal routine self-checks.';
+
+  if (isMelanoma) {
+    if (confidence >= 80 || melanomaProb >= 0.7) {
+      riskAssessment = 'High Risk';
+      riskBadgeClass = 'badge-high';
+      riskSummaryText =
+        'The model observed notable structural asymmetry, irregular borders, or pigment heterogeneity. We strongly recommend having this spot examined in person by a qualified dermatologist.';
     } else {
-      showToast('PDF report is not available for this analysis.', 'warning');
+      riskAssessment = 'Moderate Risk';
+      riskBadgeClass = 'badge-moderate';
+      riskSummaryText =
+        'Some atypical characteristics were identified that warrant professional observation. Consider consulting a healthcare professional for an in-person check.';
     }
+  } else if (melanomaProb >= 0.35 || confidence < 65) {
+    riskAssessment = 'Moderate Risk';
+    riskBadgeClass = 'badge-moderate';
+    riskSummaryText =
+      'The assessment indicates mild morphological variance. Monitoring over time or scheduling a routine skin check is advised.';
+  }
+
+  // ABCDE Clinical Features
+  const clinicalFeatures = diagnosis?.clinical_features || {};
+  const measurements = diagnosis?.measurements?.lesion || {};
+  const hasPhysicalScale = Boolean(measurements.physical_scale_available);
+
+  // Download PDF Report handler
+  const handleDownloadPDF = () => {
+    if (downloading) return;
+    setDownloading(true);
+    showToast('Preparing your report...', 'info');
+
+    setTimeout(() => {
+      if (report?.pdf_url) {
+        const link = document.createElement('a');
+        link.href = report.pdf_url;
+        link.download = `MelaDetect_Report_${analysis_id?.substring(0, 8) || 'SkinCheck'}.pdf`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        setDownloading(false);
+        showToast('Report downloaded successfully.', 'success');
+      } else {
+        setDownloading(false);
+        showToast("We couldn't generate the report right now. Please try again.", 'warning');
+      }
+    }, 800);
   };
 
+  const handlePrint = () => {
+    window.print();
+  };
+
+  // Determine current inspection image
+  let activeDisplayUrl = original_image_url;
+  if (activeImageTab === 'mask' && diagnosis?.segmentation?.mask_url) {
+    activeDisplayUrl = diagnosis.segmentation.mask_url;
+  } else if (activeImageTab === 'overlay' && diagnosis?.segmentation?.overlay_url) {
+    activeDisplayUrl = diagnosis.segmentation.overlay_url;
+  } else if (activeImageTab === 'gradcam' && explanation?.grad_cam_url) {
+    activeDisplayUrl = explanation.grad_cam_url;
+  }
+
+  // Format date
+  const displayDate = timestamp
+    ? new Date(timestamp).toLocaleDateString('en-US', {
+        month: 'long',
+        day: 'numeric',
+        year: 'numeric',
+      })
+    : new Date().toLocaleDateString('en-US', {
+        month: 'long',
+        day: 'numeric',
+        year: 'numeric',
+      });
+
   return (
-    <section className="page active" id="page-results">
-      <div className="results-header">
-        <div>
-          <h1 className="page-title">Analysis Results</h1>
-          <p className="page-subtitle">Multi-Phase Pipeline Output</p>
-        </div>
-        <div className="results-actions">
-          <button className="btn btn-white" onClick={handleDownloadPDF} disabled={!report?.pdf_url}>
-            <i className="fas fa-download"></i> Download PDF
+    <div className="page-container report-page-wrapper" id="page-report">
+      {/* Top Action Bar */}
+      <div className="report-action-bar top-bar">
+        <button
+          type="button"
+          className="btn btn-outline report-nav-back-btn"
+          onClick={() => onNavigate('history')}
+        >
+          <i className="fas fa-arrow-left" aria-hidden="true"></i>
+          <span>Back to Results</span>
+        </button>
+
+        <div className="report-actions-right">
+          <button
+            type="button"
+            className="btn btn-outline"
+            onClick={handlePrint}
+            title="Print or save as digital copy"
+          >
+            <i className="fas fa-print" aria-hidden="true"></i>
+            <span>Print</span>
           </button>
-          <button className="btn btn-primary" onClick={() => onNavigate('upload')}>
-            <i className="fas fa-plus"></i> New Analysis
+
+          <button
+            type="button"
+            className="btn btn-primary btn-download-pdf"
+            onClick={handleDownloadPDF}
+            disabled={downloading}
+          >
+            <i className="fas fa-download" aria-hidden="true"></i>
+            <span>{downloading ? 'Preparing...' : 'Download PDF'}</span>
           </button>
         </div>
       </div>
 
-      <div className="results-grid">
-        {/* Phase 1: Diagnosis Card */}
-        <div className="result-card">
-          <div className="result-card-header">
-            <h3 className="result-card-title">Phase 1: Diagnosis</h3>
-            <span
-              className={`diagnosis-badge ${isMelanoma ? 'high' : 'low'}`}
-              style={{ backgroundColor: riskColor + '20', color: riskColor }}
-            >
-              <i className={`fas ${isMelanoma ? 'fa-exclamation-triangle' : 'fa-check-circle'}`}></i>{' '}
-              {riskLevel}
+      {/* Main Report Document Sheet */}
+      <article className="card report-sheet">
+        {/* Report Document Header */}
+        <header className="report-document-header">
+          <div className="report-header-left">
+            <div className="report-brand-badge">
+              <i className="fas fa-plus-square text-teal" aria-hidden="true"></i>
+              <span>MelaDetect AI</span>
+            </div>
+            <h1 className="report-main-title">Skin Lesion Analysis Report</h1>
+            <p className="report-meta-line">
+              <span>Date: <strong>{displayDate}</strong></span>
+              {analysis_id && (
+                <span className="report-id-text">
+                  Reference: #{analysis_id.substring(0, 8).toUpperCase()}
+                </span>
+              )}
+              {_customContext?.location && (
+                <span>Location: <strong>{_customContext.location}</strong></span>
+              )}
+            </p>
+          </div>
+
+          <div className="report-header-right">
+            <span className={`risk-badge-lg ${riskBadgeClass}`}>
+              {riskAssessment}
             </span>
           </div>
+        </header>
 
-          <div className="confidence-section">
-            <div className="confidence-circle">
-              <svg viewBox="0 0 64 64">
-                <circle className="bg" cx="32" cy="32" r="28"></circle>
-                <circle
-                  className="progress"
-                  cx="32" cy="32" r="28"
-                  style={{
-                    strokeDashoffset: 175.9 - (175.9 * (diagnosis?.diagnosis?.confidence || 0)) / 100,
-                    stroke: riskColor,
-                  }}
-                ></circle>
-              </svg>
-              <span className="confidence-value" style={{ fontSize: '14px' }}>
-                {(diagnosis?.diagnosis?.confidence || 0).toFixed(1)}%
+        {/* 1. Assessment Summary */}
+        <section className="report-section" aria-labelledby="assessment-summary-heading">
+          <h2 id="assessment-summary-heading" className="report-section-heading">
+            Assessment Summary
+          </h2>
+
+          <div className="assessment-summary-grid">
+            <div className="summary-stat-box">
+              <span className="summary-stat-label">Risk Assessment</span>
+              <span className={`summary-stat-value risk-badge ${riskBadgeClass}`}>
+                {riskAssessment}
               </span>
             </div>
-          <div className="confidence-info">
-            <h4>{diagnosis?.diagnosis?.prediction}</h4>
-            <p>Thresholded model score (not a diagnosis)</p>
-          </div>
-          </div>
 
-          <div className="metrics-row" style={{ marginTop: '20px' }}>
-            <div><strong>{(melanomaProbability * 100).toFixed(1)}%</strong><span>Melanoma probability</span></div>
-            <div><strong>{((diagnosis?.non_melanoma_probability ?? diagnosis?.probabilities?.non_melanoma ?? diagnosis?.probabilities?.not_melanoma ?? 0) * 100).toFixed(1)}%</strong><span>Non-melanoma probability</span></div>
-            <div><strong>{diagnosis?.classification_threshold != null ? `${(diagnosis.classification_threshold * 100).toFixed(1)}%` : 'N/A'}</strong><span>Validated threshold</span></div>
-          </div>
-
-          <h3 className="result-card-title mb-16" style={{ marginTop: '24px' }}>AI-Extracted Clinical Features</h3>
-          <div className="clinical-features">
-            {Object.entries(diagnosis?.clinical_features || {}).map(([key, feature]) => (
-              <div className="clinical-feature" key={key}>
-                <span className="clinical-feature-name" style={{ textTransform: 'capitalize' }}>
-                  <i className="fas fa-microscope"></i> {key}
-                </span>
-                <span className="clinical-feature-value">
-                  {feature.score_label}
-                  <span className="feature-score">({(feature.score_numeric || 0).toFixed(2)})</span>
-                </span>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* Visualizations Card */}
-        <div className="result-card">
-          <div className="result-card-header">
-            <h3 className="result-card-title">Visualizations</h3>
-          </div>
-
-          <div className="images-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginTop: '16px' }}>
-            {original_image_url && (
-              <div className="result-image-preview">
-                <img src={original_image_url} alt="Original" />
-                <div className="result-image-label">Original Image</div>
-              </div>
-            )}
-            
-            {diagnosis?.segmentation?.mask_url && (
-              <div className="result-image-preview">
-                <img src={diagnosis.segmentation.mask_url} alt="Segmentation Mask" />
-                <div className="result-image-label">SegFormer Segmentation</div>
-              </div>
-            )}
-
-            {diagnosis?.segmentation?.overlay_url && (
-              <div className="result-image-preview">
-                <img src={diagnosis.segmentation.overlay_url} alt="Original image with SegFormer lesion overlay" />
-                <div className="result-image-label">Original + SegFormer Overlay</div>
-              </div>
-            )}
-
-            {explanation?.grad_cam_url && (
-              <div className="result-image-preview" style={{ gridColumn: '1 / -1' }}>
-                <img src={explanation.grad_cam_url} alt="Grad-CAM" />
-                <div className="result-image-label">Grad-CAM Attention Map</div>
-              </div>
-            )}
-          </div>
-        </div>
-
-        <div className="result-card full-width">
-          <h3 className="result-card-title mb-16">Measurements and ABCD findings</h3>
-
-          {/* Pixel measurements */}
-          <div className="metrics-row">
-            {Object.entries(diagnosis?.measurements?.lesion || {}).filter(([key]) => key.endsWith('_px') && !key.includes('bounding')).map(([key, value]) => <div key={key}><strong>{typeof value === 'number' ? value.toLocaleString() : 'N/A'}</strong><span>{key.replaceAll('_', ' ')}</span></div>)}
-          </div>
-
-          {/* Physical measurements (when scale calibration is available) */}
-          {diagnosis?.measurements?.lesion?.physical_scale_available && (
-            <div style={{ marginTop: '16px', padding: '16px', background: 'var(--accent-green-bg)', borderRadius: '8px', border: '1px solid rgba(34,197,94,0.2)' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
-                <i className="fas fa-ruler-combined" style={{ color: 'var(--accent-green)' }} />
-                <strong style={{ color: 'var(--accent-green)' }}>Physical Measurements (Calibrated)</strong>
-                {diagnosis?.scale_calibration?.detected && (
-                  <span style={{ marginLeft: 'auto', fontSize: '11px', padding: '3px 10px', borderRadius: '12px', background: 'var(--accent-green-bg)', border: '1px solid var(--accent-green)', color: 'var(--accent-green)' }}>
-                    {diagnosis.scale_calibration.method} — {(diagnosis.scale_calibration.confidence * 100).toFixed(0)}% confidence
-                  </span>
-                )}
-              </div>
-              <div className="metrics-row">
-                {diagnosis.measurements.lesion.diameter_mm != null && (
-                  <div><strong>{diagnosis.measurements.lesion.diameter_mm} mm</strong><span>diameter</span></div>
-                )}
-                {diagnosis.measurements.lesion.area_mm2 != null && (
-                  <div><strong>{diagnosis.measurements.lesion.area_mm2} mm²</strong><span>area</span></div>
-                )}
-                {diagnosis.measurements.lesion.perimeter_mm != null && (
-                  <div><strong>{diagnosis.measurements.lesion.perimeter_mm} mm</strong><span>perimeter</span></div>
-                )}
-              </div>
+            <div className="summary-stat-box">
+              <span className="summary-stat-label">Model Confidence</span>
+              <strong className="summary-stat-value text-primary font-manrope">
+                {confidence}%
+              </strong>
             </div>
-          )}
 
-          {diagnosis?.scale_calibration && !diagnosis.scale_calibration.calibration_valid && (
-            <div style={{ marginTop: '16px', padding: '14px 16px', background: 'var(--accent-amber-bg)', borderRadius: '8px', color: 'var(--text-light)' }}>
-              <strong>Physical measurement: UNAVAILABLE</strong>
-              <div style={{ marginTop: '4px' }}>
-                {diagnosis.scale_calibration.calibration_reason || 'The reference calibration could not be verified.'}
-              </div>
-              <div style={{ marginTop: '4px' }}>Pixel measurements remain available.</div>
+            <div className="summary-stat-box">
+              <span className="summary-stat-label">Status</span>
+              <span className="summary-stat-value text-success">
+                <i className="fas fa-check-circle" aria-hidden="true"></i>
+                <span style={{ marginLeft: '6px' }}>Complete</span>
+              </span>
             </div>
-          )}
-
-          <div className="clinical-features" style={{ marginTop: '18px' }}>
-            {Object.entries(diagnosis?.clinical_features || {}).map(([key, feature]) => <div className="clinical-feature" key={key}><span className="clinical-feature-name">{key}</span><span className="clinical-feature-value">{feature.score_label} ({feature.score_numeric.toFixed(2)})</span></div>)}
-            {diagnosis?.clinical_interpretations?.diameter && <div className="clinical-feature"><span className="clinical-feature-name">Diameter interpretation</span><span className="clinical-feature-value">{diagnosis.clinical_interpretations.diameter}</span></div>}
           </div>
-          <p style={{ color: 'var(--text-light)', fontSize: '13px', marginBottom: 0 }}>
-            {diagnosis?.measurements?.lesion?.physical_scale_available
-              ? 'Physical measurements were calibrated using a detected reference object. Accuracy depends on calibration quality.'
-              : 'Measurements are reported in image pixels. Include a reference object (ruler, coin) in the image for physical mm measurements.'}
+
+          <div className="assessment-meaning-card">
+            <h3 className="meaning-title">What this assessment means:</h3>
+            <p className="meaning-text">{riskSummaryText}</p>
+          </div>
+        </section>
+
+        {/* 2. Uploaded Image & Inspection Viewport */}
+        <section className="report-section" aria-labelledby="lesion-image-heading">
+          <h2 id="lesion-image-heading" className="report-section-heading">
+            Uploaded Image
+          </h2>
+
+          <div className="report-image-container">
+            <div className="report-image-viewport">
+              <img
+                src={original_image_url}
+                alt="Analyzed skin lesion"
+                className="report-lesion-img"
+              />
+              <button
+                type="button"
+                className="image-expand-btn"
+                onClick={() => {
+                  setActiveImageTab('original');
+                  setZoomModal(true);
+                }}
+                title="View full-screen"
+                aria-label="View photo in full screen"
+              >
+                <i className="fas fa-expand"></i>
+              </button>
+            </div>
+            <p className="image-caption">
+              Captured image submitted for algorithmic segmentation and feature analysis.
+            </p>
+          </div>
+        </section>
+
+        {/* 3. ABCDE Analysis */}
+        <section className="report-section" aria-labelledby="abcde-analysis-heading">
+          <h2 id="abcde-analysis-heading" className="report-section-heading">
+            ABCDE Analysis
+          </h2>
+          <p className="report-section-sub">
+            Evaluation of dermatological characteristics commonly referenced in skin health observation:
           </p>
-        </div>
 
-        {/* Phase 3: Explanation Card */}
-        <div className="result-card full-width">
-          <h3 className="result-card-title mb-16">Phase 3: Explainability & Reasoning</h3>
-          <div className="summary-card" style={{ marginBottom: '16px' }}>
-            <h4>{explanation?.summary}</h4>
-          </div>
-          {explanation?.next_steps && (
-            <div style={{ marginBottom: '18px', padding: '16px', borderLeft: '4px solid var(--primary)', background: 'var(--surface-light)', borderRadius: '8px' }}>
-              <strong>What to do next</strong>
-              <p style={{ margin: '6px 0 0', lineHeight: 1.55 }}>{explanation.next_steps}</p>
-            </div>
-          )}
-          
-          <div className="detailed-analysis-grid" style={{ gridTemplateColumns: '1fr' }}>
-            {explanation?.reasoning?.map((reason, idx) => (
-              <div className="analysis-detail-item" key={idx} style={{ padding: '12px' }}>
-                <p><i className="fas fa-check text-success" style={{ marginRight: '8px' }}></i> {reason}</p>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* Phase 2: Evidence Card */}
-        <div className="result-card full-width">
-          <h3 className="result-card-title mb-16">Phase 2: Medical Evidence (BGE + Qdrant)</h3>
-          {evidence && evidence.length > 0 ? (
-            <div className="evidence-list" style={{ display: 'grid', gap: '16px' }}>
-              {evidence.map((item, idx) => (
-                <div className="evidence-item" key={idx} style={{ background: 'var(--surface)', padding: '16px', borderRadius: '8px', border: '1px solid var(--border)' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '8px' }}>
-                    <h4 style={{ color: 'var(--primary)', margin: 0 }}>{item.title}</h4>
-                    <span style={{ fontSize: '12px', background: 'var(--surface-light)', padding: '4px 8px', borderRadius: '4px' }}>
-                      Score: {item.relevance_score?.toFixed(2)}
-                    </span>
-                  </div>
-                  <div style={{ fontSize: '12px', color: 'var(--text-light)', marginBottom: '8px' }}>Source: {item.source}</div>
-                  <p style={{ fontSize: '14px', lineHeight: '1.5', margin: 0 }}>"{item.snippet}"</p>
+          <div className="abcde-report-sections">
+            {/* A - Asymmetry */}
+            <div className="abcde-report-item">
+              <div className="abcde-item-header">
+                <div className="abcde-circle-badge">A</div>
+                <div>
+                  <h3 className="abcde-item-title">A — Asymmetry</h3>
+                  <span className="abcde-item-metric">
+                    Assessment: <strong>{clinicalFeatures.asymmetry?.score_label || 'Evaluated'}</strong>
+                  </span>
                 </div>
-              ))}
+              </div>
+              <p className="abcde-item-explanation">
+                {clinicalFeatures.asymmetry?.score_label === 'High'
+                  ? 'The lesion contours show noticeable structural asymmetry between halves.'
+                  : clinicalFeatures.asymmetry?.score_label === 'Moderate'
+                  ? 'Mild asymmetry observed across the contour axes.'
+                  : 'The lesion halves display balanced symmetry and even outline.'}
+              </p>
             </div>
-          ) : (
-            <p>No medical evidence retrieved for this analysis.</p>
-          )}
+
+            {/* B - Border */}
+            <div className="abcde-report-item">
+              <div className="abcde-item-header">
+                <div className="abcde-circle-badge">B</div>
+                <div>
+                  <h3 className="abcde-item-title">B — Border</h3>
+                  <span className="abcde-item-metric">
+                    Assessment: <strong>{clinicalFeatures.border?.score_label || 'Evaluated'}</strong>
+                  </span>
+                </div>
+              </div>
+              <p className="abcde-item-explanation">
+                {clinicalFeatures.border?.score_label === 'Irregular'
+                  ? 'The perimeter exhibits scalloped, jagged, or less distinct outer boundaries.'
+                  : 'The outer margin appears relatively regular and circumscribed.'}
+              </p>
+            </div>
+
+            {/* C - Color */}
+            <div className="abcde-report-item">
+              <div className="abcde-item-header">
+                <div className="abcde-circle-badge">C</div>
+                <div>
+                  <h3 className="abcde-item-title">C — Color</h3>
+                  <span className="abcde-item-metric">
+                    Assessment: <strong>{clinicalFeatures.color?.score_label || 'Evaluated'}</strong>
+                  </span>
+                </div>
+              </div>
+              <p className="abcde-item-explanation">
+                {clinicalFeatures.color?.score_label?.includes('Multiple')
+                  ? 'Variable pigmentation and mixed color tones detected across the surface.'
+                  : 'Color distribution is generally uniform across the lesion surface.'}
+              </p>
+            </div>
+
+            {/* D - Diameter */}
+            <div className="abcde-report-item">
+              <div className="abcde-item-header">
+                <div className="abcde-circle-badge">D</div>
+                <div>
+                  <h3 className="abcde-item-title">D — Diameter</h3>
+                  <span className="abcde-item-metric">
+                    Assessment:{' '}
+                    <strong>
+                      {hasPhysicalScale && measurements.diameter_mm
+                        ? `${measurements.diameter_mm} mm`
+                        : 'Evaluated'}
+                    </strong>
+                  </span>
+                </div>
+              </div>
+              <p className="abcde-item-explanation">
+                {hasPhysicalScale && measurements.diameter_mm
+                  ? measurements.diameter_mm > 6
+                    ? `Physical diameter is measured at ${measurements.diameter_mm} mm (larger than 6 mm benchmark).`
+                    : `Physical diameter is measured at ${measurements.diameter_mm} mm (within typical 6 mm threshold).`
+                  : 'Lesion dimension estimated. Spots exceeding 6mm or showing rapid expansion warrant in-person review.'}
+              </p>
+            </div>
+
+            {/* E - Evolution */}
+            <div className="abcde-report-item">
+              <div className="abcde-item-header">
+                <div className="abcde-circle-badge">E</div>
+                <div>
+                  <h3 className="abcde-item-title">E — Evolution</h3>
+                  <span className="abcde-item-metric">
+                    Assessment: <strong>Baseline Documented</strong>
+                  </span>
+                </div>
+              </div>
+              <p className="abcde-item-explanation">
+                {_customContext?.notes
+                  ? `Reported observation: "${_customContext.notes}". Continued tracking of any changes in shape, size, elevation, or sensation is recommended.`
+                  : 'Documenting this skin check establishes a baseline. Note any future changes in size, contour, elevation, or symptoms like itching.'}
+              </p>
+            </div>
+          </div>
+        </section>
+
+        {/* 4. AI Explanation */}
+        <section className="report-section" aria-labelledby="ai-explainability-heading">
+          <h2 id="ai-explainability-heading" className="report-section-heading">
+            AI Explanation
+          </h2>
+          <p className="report-section-sub">
+            Inspection maps displaying model attention and boundary delineation:
+          </p>
+
+          <div className="explainability-workspace">
+            {/* Layer Tabs */}
+            <div className="explainability-tab-bar" role="tablist">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={activeImageTab === 'original'}
+                className={`tab-pill ${activeImageTab === 'original' ? 'active' : ''}`}
+                onClick={() => setActiveImageTab('original')}
+              >
+                Original Image
+              </button>
+              {diagnosis?.segmentation?.overlay_url && (
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={activeImageTab === 'overlay'}
+                  className={`tab-pill ${activeImageTab === 'overlay' ? 'active' : ''}`}
+                  onClick={() => setActiveImageTab('overlay')}
+                >
+                  Lesion Boundary Overlay
+                </button>
+              )}
+              {explanation?.grad_cam_url && (
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={activeImageTab === 'gradcam'}
+                  className={`tab-pill ${activeImageTab === 'gradcam' ? 'active' : ''}`}
+                  onClick={() => setActiveImageTab('gradcam')}
+                >
+                  Model Attention Map
+                </button>
+              )}
+              {diagnosis?.segmentation?.mask_url && (
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={activeImageTab === 'mask'}
+                  className={`tab-pill ${activeImageTab === 'mask' ? 'active' : ''}`}
+                  onClick={() => setActiveImageTab('mask')}
+                >
+                  Segmentation Mask
+                </button>
+              )}
+            </div>
+
+            {/* Side-by-Side Comparison Container */}
+            <div className="explainability-side-by-side">
+              <div className="compare-pane">
+                <span className="compare-pane-title">Original Image</span>
+                <div className="compare-image-box">
+                  <img src={original_image_url} alt="Original lesion" />
+                </div>
+              </div>
+
+              <div className="compare-pane">
+                <span className="compare-pane-title">
+                  {activeImageTab === 'overlay'
+                    ? 'Boundary Delineation'
+                    : activeImageTab === 'gradcam'
+                    ? 'Attention Focus (Grad-CAM)'
+                    : activeImageTab === 'mask'
+                    ? 'Binary Segmentation Mask'
+                    : 'Selected Layer'}
+                </span>
+                <div className="compare-image-box">
+                  <img src={activeDisplayUrl} alt="Model explanation visualization" />
+                </div>
+              </div>
+            </div>
+
+            <div className="explainability-note-box">
+              <i className="fas fa-circle-info text-teal" aria-hidden="true"></i>
+              <p>
+                The highlighted areas indicate regions that contributed to the model&apos;s assessment.
+                This visualization highlights areas of algorithmic focus and does not prove melanoma.
+              </p>
+            </div>
+          </div>
+        </section>
+
+        {/* 5. Recommended Next Steps */}
+        <section className="report-section" aria-labelledby="next-steps-heading">
+          <h2 id="next-steps-heading" className="report-section-heading">
+            Recommended Next Steps
+          </h2>
+
+          <div className="next-steps-card">
+            <div className="next-step-row">
+              <div className="next-step-icon">
+                <i className="fas fa-user-doctor"></i>
+              </div>
+              <div className="next-step-text">
+                <strong>Schedule a Clinical Skin Examination</strong>
+                <p>
+                  If you notice any new, unusual, or rapidly changing spots, consider having them evaluated in person by a certified dermatologist.
+                </p>
+              </div>
+            </div>
+
+            <div className="next-step-row">
+              <div className="next-step-icon">
+                <i className="fas fa-calendar-check"></i>
+              </div>
+              <div className="next-step-text">
+                <strong>Perform Monthly Self-Checks</strong>
+                <p>
+                  Keep track of moles across your skin once a month. Take photos under good lighting to monitor changes over time.
+                </p>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        {/* Bottom Disclaimer */}
+        <footer className="medical-disclaimer-box" role="note">
+          <p>
+            MelaDetect AI provides AI-assisted information and is not a medical diagnosis. If you notice concerning or changing skin lesions, consider consulting a qualified healthcare professional.
+          </p>
+        </footer>
+      </article>
+
+      {/* Bottom Action Bar */}
+      <div className="report-action-bar bottom-bar">
+        <button
+          type="button"
+          className="btn btn-outline"
+          onClick={() => onNavigate('history')}
+        >
+          <i className="fas fa-arrow-left" aria-hidden="true"></i>
+          <span>Back to Results</span>
+        </button>
+
+        <div className="report-actions-right">
+          <button
+            type="button"
+            className="btn btn-outline"
+            onClick={handlePrint}
+          >
+            <i className="fas fa-print" aria-hidden="true"></i>
+            <span>Print Report</span>
+          </button>
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={handleDownloadPDF}
+            disabled={downloading}
+          >
+            <i className="fas fa-download" aria-hidden="true"></i>
+            <span>{downloading ? 'Preparing...' : 'Download PDF'}</span>
+          </button>
         </div>
       </div>
-      <div style={{ marginTop: '24px', padding: '14px 16px', background: 'var(--accent-red-bg)', borderRadius: '8px', fontSize: '13px' }}><strong>Medical disclaimer:</strong> This AI-based decision-support/research tool does not provide a definitive medical diagnosis and should not replace evaluation by a qualified dermatologist or healthcare professional.</div>
-    </section>
+
+      {/* Fullscreen Zoom Modal */}
+      {zoomModal && (
+        <div
+          className="modal-backdrop"
+          onClick={() => setZoomModal(false)}
+          role="dialog"
+          aria-modal="true"
+        >
+          <div className="modal-card modal-zoom-card" onClick={(e) => e.stopPropagation()}>
+            <button
+              type="button"
+              className="modal-close-btn"
+              onClick={() => setZoomModal(false)}
+              aria-label="Close full screen view"
+            >
+              <i className="fas fa-times"></i>
+            </button>
+            <img
+              src={activeDisplayUrl}
+              alt="High resolution skin lesion view"
+              className="zoom-image-element"
+            />
+          </div>
+        </div>
+      )}
+    </div>
   );
 }

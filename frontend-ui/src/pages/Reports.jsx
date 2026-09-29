@@ -1,115 +1,380 @@
 import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useToast } from '../components/Toast';
+import { useAuth } from '../components/AuthContext';
 
-export default function Reports({ onNavigate, onAnalysisComplete }) {
+export default function Reports({ onNavigate, onAnalysisComplete, mode = 'history' }) {
+  const navigate = useNavigate();
   const [analyses, setAnalyses] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [riskFilter, setRiskFilter] = useState('all');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [downloadingId, setDownloadingId] = useState(null);
   const showToast = useToast();
+  const { token } = useAuth();
+
+  const isMyResults = mode === 'results';
+  const pageTitle = isMyResults ? 'My Results' : 'History';
+  const pageSubtitle = isMyResults
+    ? 'Overview of your skin checks and lesion assessments.'
+    : 'Complete record of all your previous skin lesion checks and reports.';
 
   useEffect(() => {
+    let isMounted = true;
     const fetchAnalyses = async () => {
       try {
-        const response = await fetch('/api/analyses');
-        if (!response.ok) throw new Error('Failed to fetch history');
+        const response = await fetch('/api/analyses', {
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+        });
+        if (!response.ok) throw new Error('Failed to load check history');
         const data = await response.json();
-        setAnalyses(data);
-    } catch (err) {
-      showToast('Could not load analysis history.', 'error');
-      console.error(err);
+        if (isMounted) setAnalyses(Array.isArray(data) ? data : []);
+      } catch (err) {
+        showToast('Could not load skin check records.', 'error');
+        console.warn(err);
       } finally {
-        setLoading(false);
+        if (isMounted) setLoading(false);
       }
     };
 
     fetchAnalyses();
+    return () => { isMounted = false; };
   }, [showToast]);
 
   const viewAnalysis = async (analysisId) => {
     try {
-      const response = await fetch(`/api/analyses/${analysisId}`);
+      showToast('Loading skin check report...', 'info');
+      const response = await fetch(`/api/analyses/${analysisId}`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
       if (!response.ok) throw new Error('Failed to load analysis');
       const data = await response.json();
-      onAnalysisComplete(data);
-      showToast('Loaded analysis from history', 'info');
+      if (onAnalysisComplete) {
+        onAnalysisComplete(data);
+      }
+      navigate(`/results/${analysisId}`);
     } catch {
-      showToast('Failed to load analysis details', 'error');
+      showToast('Failed to open report. Please try again.', 'error');
     }
   };
 
-  if (loading) {
-    return (
-      <section className="page active" id="page-reports">
-        <div className="empty-state">
-          <h2>Loading History...</h2>
-        </div>
-      </section>
-    );
-  }
+  const handleDownload = async (item) => {
+    if (downloadingId) return;
+    setDownloadingId(item.analysis_id);
+    showToast('Preparing your report...', 'info');
+
+    try {
+      const response = await fetch(`/api/analyses/${item.analysis_id}`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (response.ok) {
+        const fullData = await response.json();
+        const pdfUrl = fullData?.report?.pdf_url;
+        if (pdfUrl) {
+          const link = document.createElement('a');
+          link.href = pdfUrl;
+          link.download = `MelaDetect_Report_${item.analysis_id.substring(0, 8)}.pdf`;
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+          showToast('Report downloaded successfully.', 'success');
+        } else {
+          showToast("We couldn't generate the report right now. Please try again.", 'warning');
+        }
+      } else {
+        showToast("We couldn't generate the report right now. Please try again.", 'warning');
+      }
+    } catch {
+      showToast("We couldn't generate the report right now. Please try again.", 'error');
+    } finally {
+      setDownloadingId(null);
+    }
+  };
+
+  // Determine risk details
+  const getRiskInfo = (item) => {
+    const isMelanoma = item.prediction === 'Melanoma';
+    const conf = item.confidence || 0;
+    if (isMelanoma) {
+      if (conf >= 80) return { label: 'High Risk', class: 'badge-high' };
+      return { label: 'Moderate Risk', class: 'badge-moderate' };
+    }
+    if (conf < 65) return { label: 'Moderate Risk', class: 'badge-moderate' };
+    return { label: 'Low Risk', class: 'badge-low' };
+  };
+
+  // Filter analyses
+  const filteredAnalyses = analyses.filter((item) => {
+    const isMelanoma = item.prediction === 'Melanoma';
+    const conf = item.confidence || 0;
+    const isHigh = isMelanoma && conf >= 80;
+    const isModerate = (isMelanoma && conf < 80) || (!isMelanoma && conf < 65);
+    const isLow = !isMelanoma && conf >= 65;
+
+    if (riskFilter === 'high' && !isHigh) return false;
+    if (riskFilter === 'moderate' && !isModerate) return false;
+    if (riskFilter === 'low' && !isLow) return false;
+
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase();
+      const matchId = item.analysis_id?.toLowerCase().includes(q);
+      const matchName = item.image_name?.toLowerCase().includes(q);
+      const matchDate = new Date(item.timestamp).toLocaleDateString().toLowerCase().includes(q);
+      return matchId || matchName || matchDate;
+    }
+    return true;
+  });
 
   return (
-    <section className="page active" id="page-reports">
-      <div className="page-header">
-        <h1 className="page-title">Analysis History</h1>
-        <p className="page-subtitle">View past melanoma pipeline analyses and download reports.</p>
+    <div className="page-container" id="page-history">
+      {/* Page Header */}
+      <div className="page-header-clean page-header-split">
+        <div>
+          <h1 className="page-title-clean">{pageTitle}</h1>
+          <p className="page-subtitle-clean">{pageSubtitle}</p>
+        </div>
+        <button
+          type="button"
+          className="btn btn-primary"
+          onClick={() => onNavigate('new-check')}
+        >
+          <i className="fas fa-camera" aria-hidden="true"></i>
+          <span>Start a Skin Check</span>
+        </button>
       </div>
 
-      <div className="report-container">
-        {analyses.length === 0 ? (
-          <div className="empty-state">
-            <div className="empty-state-icon"><i className="fas fa-history"></i></div>
-            <h2>No History Found</h2>
-            <p>You haven't run any analyses yet.</p>
-            <button className="btn btn-primary" onClick={() => onNavigate('upload')}>
-              <i className="fas fa-upload"></i> Upload Image
-            </button>
+      {/* Filter and Search Bar */}
+      <div className="card filters-card">
+        <div className="filter-pills-row" role="group" aria-label="Filter skin checks by risk">
+          <span className="filter-label">Filter:</span>
+          <button
+            type="button"
+            className={`filter-btn ${riskFilter === 'all' ? 'active' : ''}`}
+            onClick={() => setRiskFilter('all')}
+          >
+            All ({analyses.length})
+          </button>
+          <button
+            type="button"
+            className={`filter-btn ${riskFilter === 'low' ? 'active' : ''}`}
+            onClick={() => setRiskFilter('low')}
+          >
+            Low Risk
+          </button>
+          <button
+            type="button"
+            className={`filter-btn ${riskFilter === 'moderate' ? 'active' : ''}`}
+            onClick={() => setRiskFilter('moderate')}
+          >
+            Moderate Risk
+          </button>
+          <button
+            type="button"
+            className={`filter-btn ${riskFilter === 'high' ? 'active' : ''}`}
+            onClick={() => setRiskFilter('high')}
+          >
+            High Risk
+          </button>
+        </div>
+
+        <div className="filter-search-box">
+          <i className="fas fa-search filter-search-icon" aria-hidden="true"></i>
+          <input
+            type="text"
+            className="filter-search-input"
+            placeholder="Search by date or image name..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            aria-label="Search previous skin checks"
+          />
+        </div>
+      </div>
+
+      {/* Content Area */}
+      {loading ? (
+        <div className="card loading-state-card">
+          <i className="fas fa-spinner fa-spin text-teal loading-spinner-icon" aria-hidden="true"></i>
+          <p className="loading-state-text">Loading previous skin checks...</p>
+        </div>
+      ) : filteredAnalyses.length === 0 ? (
+        <div className="card empty-records-card">
+          <div className="empty-records-icon" aria-hidden="true">
+            <i className="fas fa-notes-medical"></i>
           </div>
-        ) : (
-          <div className="history-table-container" style={{ background: 'var(--surface)', borderRadius: '12px', overflow: 'hidden' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
-              <thead style={{ background: 'var(--surface-light)' }}>
+          <h2 className="empty-records-title">
+            {analyses.length === 0 ? 'No skin checks yet' : 'No matching results'}
+          </h2>
+          <p className="empty-records-desc">
+            {analyses.length === 0
+              ? 'Start your first skin check to see your results here.'
+              : 'Try changing your search term or risk filter.'}
+          </p>
+          {analyses.length === 0 && (
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={() => onNavigate('new-check')}
+            >
+              <i className="fas fa-camera" aria-hidden="true"></i>
+              <span>Start Skin Check</span>
+            </button>
+          )}
+        </div>
+      ) : (
+        <>
+          {/* Desktop Table View */}
+          <div className="card table-card-wrapper desktop-only-view">
+            <table className="clean-data-table" aria-label="Previous skin check results">
+              <thead>
                 <tr>
-                  <th style={{ padding: '16px' }}>Date</th>
-                  <th style={{ padding: '16px' }}>Image Name</th>
-                  <th style={{ padding: '16px' }}>Prediction</th>
-                  <th style={{ padding: '16px' }}>Confidence</th>
-                  <th style={{ padding: '16px' }}>Status</th>
-                  <th style={{ padding: '16px' }}>Actions</th>
+                  <th scope="col" style={{ width: '80px' }}>Image</th>
+                  <th scope="col">Date</th>
+                  <th scope="col">Assessment</th>
+                  <th scope="col">Confidence</th>
+                  <th scope="col" style={{ textAlign: 'right' }}>Actions</th>
                 </tr>
               </thead>
               <tbody>
-                {analyses.map((item) => (
-                  <tr key={item.analysis_id} style={{ borderBottom: '1px solid var(--border)' }}>
-                    <td style={{ padding: '16px' }}>{new Date(item.timestamp).toLocaleDateString()}</td>
-                    <td style={{ padding: '16px' }}>{item.image_name}</td>
-                    <td style={{ padding: '16px' }}>
-                      <span style={{ 
-                        color: item.prediction === 'Melanoma' ? 'var(--danger)' : 'var(--success)',
-                        fontWeight: 'bold'
-                      }}>
-                        {item.prediction}
-                      </span>
-                    </td>
-                    <td style={{ padding: '16px' }}>{item.confidence.toFixed(1)}%</td>
-                    <td style={{ padding: '16px' }}>
-                      <span className={`badge ${item.status === 'completed' ? 'badge-success' : 'badge-warning'}`} style={{ padding: '4px 8px', borderRadius: '4px', fontSize: '12px', background: 'var(--surface-light)' }}>
-                        {item.status}
-                      </span>
-                    </td>
-                    <td style={{ padding: '16px' }}>
-                      <button 
-                        className="btn btn-sm btn-white"
-                        onClick={() => viewAnalysis(item.analysis_id)}
-                      >
-                         View Results
-                      </button>
-                    </td>
-                  </tr>
-                ))}
+                {filteredAnalyses.map((item) => {
+                  const risk = getRiskInfo(item);
+                  const dateStr = new Date(item.timestamp).toLocaleDateString('en-US', {
+                    month: 'short',
+                    day: 'numeric',
+                    year: 'numeric',
+                  });
+
+                  return (
+                    <tr key={item.analysis_id}>
+                      {/* Thumbnail */}
+                      <td>
+                        <div className="table-thumbnail-box">
+                          {item.image_url ? (
+                            <img src={item.image_url} alt="Skin check thumbnail" />
+                          ) : (
+                            <div className="thumbnail-fallback">
+                              <i className="far fa-image"></i>
+                            </div>
+                          )}
+                        </div>
+                      </td>
+
+                      {/* Date */}
+                      <td>
+                        <strong className="table-date-text">{dateStr}</strong>
+                        <div className="table-sub-text">
+                          {item.image_name || 'Lesion Image'}
+                        </div>
+                      </td>
+
+                      {/* Risk Assessment */}
+                      <td>
+                        <span className={`risk-badge ${risk.class}`}>
+                          {risk.label}
+                        </span>
+                      </td>
+
+                      {/* Confidence */}
+                      <td>
+                        <strong className="table-confidence-text">
+                          {Math.round(item.confidence || 0)}%
+                        </strong>
+                      </td>
+
+                      {/* Actions */}
+                      <td style={{ textAlign: 'right' }}>
+                        <div className="table-actions-group">
+                          <button
+                            type="button"
+                            className="btn btn-sm btn-outline"
+                            onClick={() => viewAnalysis(item.analysis_id)}
+                          >
+                            <span>View Report</span>
+                            <i className="fas fa-arrow-right" aria-hidden="true"></i>
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn-sm btn-ghost"
+                            onClick={() => handleDownload(item)}
+                            title="Download PDF"
+                            aria-label={`Download report for check on ${dateStr}`}
+                            disabled={downloadingId === item.analysis_id}
+                          >
+                            <i className="fas fa-download"></i>
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
-        )}
-      </div>
-    </section>
+
+          {/* Mobile Card Grid View */}
+          <div className="mobile-cards-grid mobile-only-view">
+            {filteredAnalyses.map((item) => {
+              const risk = getRiskInfo(item);
+              const dateStr = new Date(item.timestamp).toLocaleDateString('en-US', {
+                month: 'short',
+                day: 'numeric',
+                year: 'numeric',
+              });
+
+              return (
+                <div key={item.analysis_id} className="card result-card-mobile">
+                  <div className="mobile-card-top">
+                    <div className="mobile-card-thumb">
+                      {item.image_url ? (
+                        <img src={item.image_url} alt="Skin check thumbnail" />
+                      ) : (
+                        <div className="thumbnail-fallback">
+                          <i className="far fa-image"></i>
+                        </div>
+                      )}
+                    </div>
+                    <div className="mobile-card-meta">
+                      <span className="mobile-card-date">{dateStr}</span>
+                      <span className={`risk-badge ${risk.class}`}>
+                        {risk.label}
+                      </span>
+                      <span className="mobile-card-conf">
+                        {Math.round(item.confidence || 0)}% confidence
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="mobile-card-actions">
+                    <button
+                      type="button"
+                      className="btn btn-sm btn-primary mobile-btn-flex"
+                      onClick={() => viewAnalysis(item.analysis_id)}
+                    >
+                      <i className="fas fa-file-waveform" aria-hidden="true"></i>
+                      <span>View Report</span>
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-sm btn-outline"
+                      onClick={() => handleDownload(item)}
+                      aria-label="Download PDF"
+                      disabled={downloadingId === item.analysis_id}
+                    >
+                      <i className="fas fa-download" aria-hidden="true"></i>
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </>
+      )}
+
+      {/* Subtle Medical Disclaimer */}
+      <footer className="medical-disclaimer-box" role="note">
+        <p>
+          MelaDetect AI provides AI-assisted information and is not a medical diagnosis. If you notice concerning or changing skin lesions, consider consulting a qualified healthcare professional.
+        </p>
+      </footer>
+    </div>
   );
 }

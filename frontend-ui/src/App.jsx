@@ -1,9 +1,21 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useMemo } from 'react';
+import {
+  BrowserRouter,
+  Routes,
+  Route,
+  Navigate,
+  Outlet,
+  useLocation,
+  useNavigate,
+} from 'react-router-dom';
 import Sidebar from './components/Sidebar';
 import Header from './components/Header';
+import SignOutModal from './components/SignOutModal';
 import { ToastProvider } from './components/Toast';
 import { AuthProvider, useAuth } from './components/AuthContext';
-import Dashboard from './pages/Dashboard';
+import { ThemeProvider } from './components/ThemeContext';
+import { NotificationProvider } from './components/NotificationContext';
+import Home from './pages/Dashboard';
 import Upload from './pages/Upload';
 import Results from './pages/Results';
 import Reports from './pages/Reports';
@@ -14,96 +26,166 @@ import Signup from './pages/Signup';
 import Profile from './pages/Profile';
 import AdminApp from './pages/admin/AdminApp';
 
-function AuthenticatedApp() {
-  const [activePage, setActivePage] = useState('dashboard');
-  const [analysisResult, setAnalysisResult] = useState(null);
+function getActivePage(pathname) {
+  if (pathname.startsWith('/home') || pathname === '/') return 'home';
+  if (pathname.startsWith('/upload') || pathname.startsWith('/new-check')) return 'upload';
+  if (pathname.startsWith('/results')) return 'results';
+  if (pathname.startsWith('/history') || pathname.startsWith('/reports')) return 'history';
+  if (pathname.startsWith('/profile')) return 'profile';
+  if (pathname.startsWith('/settings')) return 'settings';
+  if (pathname.startsWith('/help')) return 'help';
+  return 'home';
+}
 
-  const navigateTo = useCallback((page) => {
-    setActivePage(page);
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+function AuthenticatedLayout() {
+  const { user, logout } = useAuth();
+  const location = useLocation();
+  const navigate = useNavigate();
+
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const [collapsed, setCollapsed] = useState(() => {
+    return localStorage.getItem('sidebar_collapsed') === 'true';
+  });
+  const [showSignOutModal, setShowSignOutModal] = useState(false);
+
+  const activePage = useMemo(() => getActivePage(location.pathname), [location.pathname]);
+
+  const toggleDesktopCollapsed = useCallback(() => {
+    setCollapsed((prev) => {
+      const next = !prev;
+      localStorage.setItem('sidebar_collapsed', String(next));
+      return next;
+    });
   }, []);
 
-  const handleAnalysisComplete = useCallback((response) => {
-    setAnalysisResult(response);
-    setActivePage('results');
-  }, []);
+  const handleSignOutConfirm = useCallback(() => {
+    setShowSignOutModal(false);
+    logout();
+    navigate('/login', { replace: true });
+  }, [logout, navigate]);
 
-  const renderPage = () => {
-    switch (activePage) {
-      case 'dashboard':
-        return <Dashboard onNavigate={navigateTo} />;
-      case 'upload':
-        return <Upload onAnalysisComplete={handleAnalysisComplete} />;
-      case 'results':
-        return <Results analysisResult={analysisResult} onNavigate={navigateTo} />;
-      case 'reports':
-        return <Reports onNavigate={navigateTo} onAnalysisComplete={handleAnalysisComplete} />;
-      case 'settings':
-        return <Settings />;
-      case 'help':
-        return <Help />;
-      case 'profile':
-        return <Profile />;
-      default:
-        return <Dashboard onNavigate={navigateTo} />;
-    }
-  };
+  if (user?.role === 'admin') {
+    return <AdminApp />;
+  }
 
   return (
-    <div className="app">
-      <Sidebar activePage={activePage} onNavigate={navigateTo} />
-      <main className="main-content">
-        <Header activePage={activePage} onNavigate={navigateTo} />
-        {renderPage()}
+    <div className={`app ${collapsed ? 'app-sidebar-collapsed' : ''}`}>
+      <Sidebar
+        collapsed={collapsed}
+        mobileOpen={mobileOpen}
+        onCloseMobile={() => setMobileOpen(false)}
+        onRequestSignOut={() => setShowSignOutModal(true)}
+      />
+      <main className={`main-content ${collapsed ? 'main-content-collapsed' : ''}`}>
+        <Header
+          activePage={activePage}
+          onToggleMobileSidebar={() => setMobileOpen((prev) => !prev)}
+          onToggleDesktopSidebar={toggleDesktopCollapsed}
+          onRequestSignOut={() => setShowSignOutModal(true)}
+        />
+        <div className="content-inner">
+          <Outlet />
+        </div>
       </main>
+
+      <SignOutModal
+        isOpen={showSignOutModal}
+        onClose={() => setShowSignOutModal(false)}
+        onConfirm={handleSignOutConfirm}
+      />
     </div>
   );
 }
 
-function UnauthenticatedApp() {
-  const [page, setPage] = useState('login');
-
-  const navigateTo = useCallback((p) => {
-    setPage(p);
-    window.scrollTo({ top: 0, behavior: 'smooth' });
-  }, []);
-
-  if (page === 'signup') {
-    return <Signup onNavigate={navigateTo} />;
-  }
-  return <Login onNavigate={navigateTo} />;
-}
-
-function AppGate() {
-  const { user, isAuthenticated, loading } = useAuth();
+function ProtectedRoute() {
+  const { isAuthenticated, loading } = useAuth();
 
   if (loading) {
     return (
-      <div className="auth-loading-screen">
-        <div className="auth-loading-content">
-          <div className="auth-brand-icon">🔬</div>
-          <h1 className="auth-brand-title">
+      <div className="auth-page">
+        <div className="card loading-gate-card">
+          <div className="loading-gate-icon">
+            <i className="fas fa-plus-square"></i>
+          </div>
+          <h2 className="loading-gate-title">
             Mela<span>Detect</span> AI
-          </h1>
-          <div className="auth-spinner-large"></div>
+          </h2>
+          <p className="loading-gate-subtitle">Initializing Workspace...</p>
         </div>
       </div>
     );
   }
 
-  if (isAuthenticated) {
-    return user?.role === 'admin' ? <AdminApp /> : <AuthenticatedApp />;
+  if (!isAuthenticated) {
+    return <Navigate to="/login" replace />;
   }
 
-  return <UnauthenticatedApp />;
+  return <AuthenticatedLayout />;
+}
+
+function PublicAuthRoute({ children }) {
+  const { isAuthenticated, loading } = useAuth();
+
+  if (loading) {
+    return null;
+  }
+
+  if (isAuthenticated) {
+    return <Navigate to="/home" replace />;
+  }
+
+  return children;
 }
 
 export default function App() {
   return (
     <ToastProvider>
-      <AuthProvider>
-        <AppGate />
-      </AuthProvider>
+      <ThemeProvider>
+        <AuthProvider>
+          <NotificationProvider>
+            <BrowserRouter>
+              <Routes>
+                {/* Public Authentication Routes */}
+                <Route
+                  path="/login"
+                  element={
+                    <PublicAuthRoute>
+                      <Login />
+                    </PublicAuthRoute>
+                  }
+                />
+                <Route
+                  path="/signup"
+                  element={
+                    <PublicAuthRoute>
+                      <Signup />
+                    </PublicAuthRoute>
+                  }
+                />
+
+                {/* Authenticated Workspace Routes */}
+                <Route element={<ProtectedRoute />}>
+                  <Route index element={<Navigate to="/home" replace />} />
+                  <Route path="/home" element={<Home />} />
+                  <Route path="/dashboard" element={<Navigate to="/home" replace />} />
+                  <Route path="/upload" element={<Upload />} />
+                  <Route path="/new-check" element={<Navigate to="/upload" replace />} />
+                  <Route path="/results" element={<Results />} />
+                  <Route path="/results/:reportId" element={<Results />} />
+                  <Route path="/history" element={<Reports mode="history" />} />
+                  <Route path="/reports" element={<Navigate to="/history" replace />} />
+                  <Route path="/profile" element={<Profile />} />
+                  <Route path="/settings" element={<Settings />} />
+                  <Route path="/help" element={<Help />} />
+                </Route>
+
+                {/* Catch-all */}
+                <Route path="*" element={<Navigate to="/home" replace />} />
+              </Routes>
+            </BrowserRouter>
+          </NotificationProvider>
+        </AuthProvider>
+      </ThemeProvider>
     </ToastProvider>
   );
 }
