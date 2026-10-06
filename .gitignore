@@ -29,3 +29,10 @@ uploads/*
 # OS
 .DS_Store
 Thumbs.db
+
+# RAG Data
+qdrant_data/
+rag_pipeline/cleaned_documents/
+
+#inference helper
+extract_pth_from_zip.py

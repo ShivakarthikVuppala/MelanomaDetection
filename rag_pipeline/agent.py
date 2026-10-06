@@ -76,20 +76,28 @@ _embedding_model = FastEmbedEmbeddings(
 logger.info("Connecting to Qdrant...")
 
 if settings.QDRANT_MODE == "cloud":
-    _vector_store = QdrantVectorStore.from_existing_collection(
-        embedding=_embedding_model,
-        collection_name=settings.QDRANT_COLLECTION_NAME,
-        url=settings.QDRANT_CLOUD_URL,
-        api_key=settings.QDRANT_CLOUD_API_KEY
-    )
-    logger.info(f"Qdrant Cloud connected: {settings.QDRANT_CLOUD_URL}")
+    try:
+        _vector_store = QdrantVectorStore.from_existing_collection(
+            embedding=_embedding_model,
+            collection_name=settings.QDRANT_COLLECTION_NAME,
+            url=settings.QDRANT_CLOUD_URL,
+            api_key=settings.QDRANT_CLOUD_API_KEY
+        )
+        logger.info(f"Qdrant Cloud connected: {settings.QDRANT_CLOUD_URL}")
+    except Exception as e:
+        logger.warning(f"Qdrant Cloud not found: {e}")
+        _vector_store = None
 else:
-    _vector_store = QdrantVectorStore.from_existing_collection(
-        embedding=_embedding_model,
-        collection_name=settings.QDRANT_COLLECTION_NAME,
-        path=settings.QDRANT_LOCAL_PATH
-    )
-    logger.info("Qdrant local connected.")
+    try:
+        _vector_store = QdrantVectorStore.from_existing_collection(
+            embedding=_embedding_model,
+            collection_name=settings.QDRANT_COLLECTION_NAME,
+            path=settings.QDRANT_LOCAL_PATH
+        )
+        logger.info("Qdrant local connected.")
+    except Exception as e:
+        logger.warning(f"Qdrant local not found: {e}")
+        _vector_store = None
 
 logger.info("Loading BM25 index...")
 
@@ -936,94 +944,3 @@ def create_backend() -> AdvancedRetrievalBackend:
 # 6. Test — End-to-end ABCDE pipeline
 # ============================================================
 
-if __name__ == "__main__":
-
-    from model_pipeline.pipeline import MelanomaPipeline
-
-    logger.info("\nStarting complete melanoma ABCDE pipeline (v4.0)...")
-
-    # --------------------------------------------------------
-    # 1. Run image pipeline
-    # --------------------------------------------------------
-
-    image_pipeline = MelanomaPipeline()
-
-    image_result = image_pipeline.analyze(
-        "test_images/test.jpg"
-    )
-
-    # --------------------------------------------------------
-    # 2. Convert image pipeline output to ABCDE RAG case
-    # --------------------------------------------------------
-
-    prediction = image_result["prediction"]
-    metrics = image_result["abcd_metrics"]
-
-    case_data = {
-        "case_id": "IMAGE-TEST-001",
-        "prediction": prediction["label"],
-        "confidence": prediction["confidence"],
-        "abcde_metrics": {
-            "asymmetry_index": metrics["asymmetry_index"],
-            "border_irregularity_score": metrics["border_irregularity_score"],
-            "color_variation_score": metrics["color_variation_score"],
-            "diameter_pixels": metrics["diameter_pixels"],
-            "evolution": {
-                "reported_change": True,
-                "change_types": ["enlargement", "darkening"],
-                "timeframe_months": 3,
-                "symptoms": ["mild itching"],
-                "notes": "Lesion reported to have enlarged and darkened over past 3 months."
-            }
-        }
-    }
-
-    # --------------------------------------------------------
-    # 3. Send real image results to Agentic RAG
-    # --------------------------------------------------------
-
-    logger.info("\n" + "=" * 70)
-    logger.info("SENDING ABCDE RESULTS TO AGENTIC RAG (v4.0)")
-    logger.info("=" * 70)
-
-    agent = create_backend()
-
-    report = agent.generate_report(case_data)
-
-    # --------------------------------------------------------
-    # 4. Display final result
-    # --------------------------------------------------------
-
-    logger.info("\n" + "=" * 70)
-    logger.info("FINAL IMAGE → ABCDE RAG REPORT")
-    logger.info("=" * 70)
-
-    print(json.dumps(report, indent=2, default=str))
-
-    # --------------------------------------------------------
-    # 5. Display reasoning trace and performance
-    # --------------------------------------------------------
-
-    trace = report.get("reasoning_trace", {})
-    perf = report.get("performance_metrics", {})
-
-    logger.info("\n" + "=" * 70)
-    logger.info("REASONING TRACE SUMMARY")
-    logger.info("=" * 70)
-    logger.info(f"  Framework:          {trace.get('framework', 'ABCDE')}")
-    logger.info(f"  Version:            {trace.get('version', '4.0')}")
-    logger.info(f"  Query mode:         {trace.get('query_mode', 'N/A')}")
-    logger.info(f"  Search method:      {trace.get('search_method', 'N/A')}")
-    logger.info(f"  Total queries:      {trace.get('total_queries', 0)}")
-    logger.info(f"  Reasoning cycles:   {trace.get('reasoning_cycles', 0)}")
-    logger.info(f"  Evidence passages:  {trace.get('total_evidence_passages', 0)}")
-    logger.info(f"  Embedding model:    {trace.get('embedding_model', 'N/A')}")
-    logger.info(f"  Reranker model:     {trace.get('reranker_model', 'N/A')}")
-
-    logger.info("\n" + "=" * 70)
-    logger.info("PERFORMANCE METRICS")
-    logger.info("=" * 70)
-    logger.info(f"  Total duration:     {perf.get('total_duration_ms', 0):.0f} ms")
-
-    for op, data in perf.get("timing_breakdown", {}).items():
-        logger.info(f"  {op:25s} {data['total_ms']:>8.0f} ms ({data['count']} calls)")

@@ -132,6 +132,15 @@ export default function Upload({ onAnalysisComplete, onNavigate }) {
       formData.append('file', file);
       formData.append('scale_method', 'auto');
 
+      // Pass user-described observed changes as clinical context for RAG
+      if (notes && notes.trim()) {
+        const clinicalCtx = {
+          evolution: notes.trim(),
+          notes: notes.trim(),
+        };
+        formData.append('clinical_context_json', JSON.stringify(clinicalCtx));
+      }
+
       const result = await new Promise((resolve, reject) => {
         const request = new XMLHttpRequest();
         request.open('POST', '/api/analyze');
@@ -447,14 +456,15 @@ export default function Upload({ onAnalysisComplete, onNavigate }) {
 
                     {/* Optional Observations Context */}
                     <div className="upload-context-section">
-                      <label className="context-label" htmlFor="upload-notes">Observed Changes (Optional)</label>
-                      <input
+                      <label className="context-label" htmlFor="upload-notes">Observed Changes <span style={{color:'var(--text-muted)', fontWeight:400, fontSize:'12px'}}>(Optional — improves AI evidence matching)</span></label>
+                      <textarea
                         id="upload-notes"
-                        type="text"
                         className="form-input-clean"
-                        placeholder="e.g. Noticed recent darkening or slight itching..."
+                        rows={3}
+                        placeholder="e.g. Noticed darkening over past 2 months, occasional itching, slight size increase or shape change..."
                         value={notes}
                         onChange={(e) => setNotes(e.target.value)}
+                        style={{ resize: 'vertical', minHeight: '80px' }}
                       />
                     </div>
 

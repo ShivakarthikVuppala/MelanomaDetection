@@ -266,7 +266,7 @@ def train_classifier(config_path: str = "config.yaml"):
         if val_metrics["auroc"] > best_auroc:
             best_auroc = val_metrics["auroc"]
             patience_counter = 0
-            save_path = checkpoint_dir / "best_swin_checkpoint.pth"
+            save_path = checkpoint_dir / "best_swin_checkpoint_v2.pth"
             torch.save(model.state_dict(), save_path)
             print(f"  ✓ New best AUROC: {best_auroc:.4f} — saved to {save_path}")
         else:
@@ -277,5 +277,5 @@ def train_classifier(config_path: str = "config.yaml"):
 
     log_file.close()
     print(f"\nTraining complete. Best AUROC: {best_auroc:.4f}")
-    print(f"Checkpoint: {checkpoint_dir / 'best_swin_checkpoint.pth'}")
+    print(f"Checkpoint: {checkpoint_dir / 'best_swin_checkpoint_v2.pth'}")
     print(f"Log: {log_path}")

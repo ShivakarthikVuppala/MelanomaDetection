@@ -143,6 +143,9 @@ class ExplanationOut(BaseModel):
     confidence_assessment: str
     next_steps: Optional[str] = None
     limitations: List[str] = Field(default_factory=list)
+    evidence_citations: List[Dict[str, Any]] = Field(default_factory=list)
+    grad_cam_detail: Optional[str] = None
+    flags: List[str] = Field(default_factory=list)
 
 
 class ReportOut(BaseModel):

@@ -105,7 +105,7 @@ paths:
   segmentation_masks: dataset/segmentation/masks/
   checkpoints: checkpoints/
   # New model trained with Codex — used for all live inference and Grad-CAM.
-  classification_checkpoint: checkpoints/best_swin_checkpoint.pth
+  classification_checkpoint: checkpoints/best_swin_checkpoint_v2.pth
   outputs: outputs/
 
 # ---------------------------------------------------------------------------

@@ -139,7 +139,7 @@ def _configured_model_paths() -> tuple[Path, Path]:
     )
     classification_path = _resolve_project_path(
         paths.get("classification_checkpoint"),
-        PROJECT_ROOT / "checkpoints" / "best_swin_checkpoint.pth",
+        PROJECT_ROOT / "checkpoints" / "best_swin_checkpoint_v2.pth",
     )
     segmentation_path = _resolve_project_path(
         config.get("segmentation", {}).get("checkpoint"),
@@ -305,13 +305,41 @@ def _workflow_to_response(state, original_image_url: Optional[str]) -> AnalysisR
     if state.explanation_result is not None:
         result = state.explanation_result
         if isinstance(result, dict):
-            explanation = ExplanationOut(summary=result.get("model_observation", "Explanation unavailable."),
-                reasoning=[result.get("literature_context", "")], confidence_assessment="requires-review" if result.get("uncertainty") else "moderate",
-                limitations=result.get("uncertainty", []))
+            # Legacy template-mode or fallback dict — map generously
+            explanation = ExplanationOut(
+                summary=result.get("summary", result.get("model_observation", "Explanation unavailable.")),
+                reasoning=[s for s in [
+                    result.get("literature_context", ""),
+                    result.get("model_observation", ""),
+                ] if s],
+                confidence_assessment="requires-review" if result.get("uncertainty") else "moderate",
+                limitations=result.get("uncertainty", []),
+                evidence_citations=result.get("evidence_citations", []),
+                grad_cam_detail=result.get("grad_cam_detail"),
+                flags=result.get("flags", []),
+            )
         else:
-            explanation = ExplanationOut(summary=result.summary, reasoning=result.reasoning,
-                grad_cam_url=_output_url(getattr(state, "grad_cam_saved_path", None), "gradcam_samples"),
-                confidence_assessment=result.confidence_assessment, next_steps=result.next_steps, limitations=result.limitations)
+            # ExplanationResult dataclass from EvidenceGroundedExplanationService
+            grad_cam_url = _output_url(
+                getattr(state, "grad_cam_saved_path", None), "gradcam_samples"
+            )
+            # Also check explanation object for grad_cam_url attribute
+            if not grad_cam_url and hasattr(result, "grad_cam_url"):
+                grad_cam_url = result.grad_cam_url
+            explanation = ExplanationOut(
+                summary=result.summary,
+                reasoning=result.reasoning,
+                grad_cam_url=grad_cam_url,
+                confidence_assessment=result.confidence_assessment,
+                next_steps=result.next_steps,
+                limitations=result.limitations,
+                evidence_citations=[
+                    dict(c) if isinstance(c, dict) else vars(c) if hasattr(c, '__dict__') else c
+                    for c in (result.evidence_citations or [])
+                ],
+                grad_cam_detail=getattr(result, "grad_cam_detail", None),
+                flags=getattr(result, "flags", []),
+            )
 
     report = ReportOut()
     if state.report_result is not None and state.report_result.pdf_path:

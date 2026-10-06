@@ -164,7 +164,7 @@ def main():
             return path if path.is_absolute() else config_file.parent / path
         _ckpt = _resolve(
             _paths.get("classification_checkpoint"),
-            str(Path("checkpoints") / "best_swin_checkpoint.pth"),
+            str(Path("checkpoints") / "best_swin_checkpoint_v2.pth"),
         )
         cam = SwinGradCAM(str(_ckpt))
         cam.save_visualization(

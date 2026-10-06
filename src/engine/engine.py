@@ -74,12 +74,12 @@ class CoreDiagnosisEngine:
         )
 
         # Classifier — prefer explicit classification_checkpoint; fall back to
-        # legacy best_swin_checkpoint.pth inside the checkpoints folder.
+        # legacy best_swin_checkpoint_v2.pth inside the checkpoints folder.
         project_root = Path(self.config_path).parent
         if paths.get("classification_checkpoint"):
             checkpoint = str(project_root / paths["classification_checkpoint"])
         else:
-            checkpoint = str(project_root / "checkpoints" / "best_swin_checkpoint.pth")
+            checkpoint = str(project_root / "checkpoints" / "best_swin_checkpoint_v2.pth")
         self.classifier = SwinV2Predictor(
             checkpoint_path=checkpoint,
             model_name=cls_cfg["model_name"],
@@ -181,11 +181,26 @@ class CoreDiagnosisEngine:
         if raw_mask.ndim != 2:
             raise RuntimeError("segmentation_failed")
         try:
-            reference_bbox = (
-                scale_cal.reference_bbox_px
-                if scale_cal.detected and scale_cal.calibration_valid
-                else None
-            )
+            # scale_cal.reference_bbox_px is in original-image pixel space.
+            # raw_mask is in preprocessed (possibly resized) pixel space.
+            # Scale the exclusion bbox to match the mask dimensions so the
+            # scale reference is correctly excluded from lesion selection.
+            reference_bbox = None
+            if scale_cal.detected and scale_cal.calibration_valid and scale_cal.reference_bbox_px is not None:
+                orig_h, orig_w = raw["original_image"].shape[:2]
+                mask_h, mask_w = raw_mask.shape[:2]
+                if orig_h > 0 and orig_w > 0 and (orig_h != mask_h or orig_w != mask_w):
+                    sx = mask_w / orig_w
+                    sy = mask_h / orig_h
+                    bx, by, bw, bh = scale_cal.reference_bbox_px
+                    reference_bbox = (
+                        int(round(bx * sx)),
+                        int(round(by * sy)),
+                        max(1, int(round(bw * sx))),
+                        max(1, int(round(bh * sy))),
+                    )
+                else:
+                    reference_bbox = scale_cal.reference_bbox_px
             mask = refine_lesion_mask(raw_mask, excluded_bbox=reference_bbox)
         except ValueError as exc:
             raise RuntimeError("segmentation_failed") from exc

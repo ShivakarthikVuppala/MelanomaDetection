@@ -41,7 +41,21 @@ export default function Reports({ onNavigate, onAnalysisComplete, mode = 'histor
     return () => { isMounted = false; };
   }, [showToast]);
 
-  const viewAnalysis = async (analysisId) => {
+  const isFailedAnalysis = (item) => {
+    return item.status === 'failed' || item.status === 'error' || item.status === 'image_quality_insufficient' ||
+      (!item.status && !item.prediction) ||
+      (item.confidence === 0 && !item.prediction);
+  };
+
+  const viewAnalysis = async (analysisId, item) => {
+    // Guard: if the list-level item already looks failed, skip the fetch
+    if (item && isFailedAnalysis(item)) {
+      showToast(
+        'This analysis could not be completed. Please upload a valid dermoscopic skin image and try again.',
+        'warning'
+      );
+      return;
+    }
     try {
       showToast('Loading skin check report...', 'info');
       const response = await fetch(`/api/analyses/${analysisId}`, {
@@ -49,6 +63,18 @@ export default function Reports({ onNavigate, onAnalysisComplete, mode = 'histor
       });
       if (!response.ok) throw new Error('Failed to load analysis');
       const data = await response.json();
+      // Guard: full record confirms failure
+      if (
+        data.status === 'failed' || data.status === 'error' ||
+        data.status === 'image_quality_insufficient' ||
+        (!data.diagnosis && data.status !== 'completed')
+      ) {
+        showToast(
+          'This analysis could not be completed. Please upload a valid dermoscopic skin image and try again.',
+          'warning'
+        );
+        return;
+      }
       if (onAnalysisComplete) {
         onAnalysisComplete(data);
       }
@@ -93,6 +119,7 @@ export default function Reports({ onNavigate, onAnalysisComplete, mode = 'histor
 
   // Determine risk details
   const getRiskInfo = (item) => {
+    if (isFailedAnalysis(item)) return { label: 'Analysis Failed', class: 'badge-failed' };
     const isMelanoma = item.prediction === 'Melanoma';
     const conf = item.confidence || 0;
     if (isMelanoma) {
@@ -283,24 +310,38 @@ export default function Reports({ onNavigate, onAnalysisComplete, mode = 'histor
                       {/* Actions */}
                       <td style={{ textAlign: 'right' }}>
                         <div className="table-actions-group">
-                          <button
-                            type="button"
-                            className="btn btn-sm btn-outline"
-                            onClick={() => viewAnalysis(item.analysis_id)}
-                          >
-                            <span>View Report</span>
-                            <i className="fas fa-arrow-right" aria-hidden="true"></i>
-                          </button>
-                          <button
-                            type="button"
-                            className="btn btn-sm btn-ghost"
-                            onClick={() => handleDownload(item)}
-                            title="Download PDF"
-                            aria-label={`Download report for check on ${dateStr}`}
-                            disabled={downloadingId === item.analysis_id}
-                          >
-                            <i className="fas fa-download"></i>
-                          </button>
+                          {isFailedAnalysis(item) ? (
+                            <button
+                              type="button"
+                              className="btn btn-sm btn-outline btn-failed-report"
+                              onClick={() => showToast('This analysis could not be completed. Please upload a valid dermoscopic skin image and try again.', 'warning')}
+                              title="Analysis failed — upload a valid image to retry"
+                            >
+                              <i className="fas fa-triangle-exclamation" aria-hidden="true"></i>
+                              <span>Invalid Image</span>
+                            </button>
+                          ) : (
+                            <>
+                              <button
+                                type="button"
+                                className="btn btn-sm btn-outline"
+                                onClick={() => viewAnalysis(item.analysis_id, item)}
+                              >
+                                <span>View Report</span>
+                                <i className="fas fa-arrow-right" aria-hidden="true"></i>
+                              </button>
+                              <button
+                                type="button"
+                                className="btn btn-sm btn-ghost"
+                                onClick={() => handleDownload(item)}
+                                title="Download PDF"
+                                aria-label={`Download report for check on ${dateStr}`}
+                                disabled={downloadingId === item.analysis_id}
+                              >
+                                <i className="fas fa-download"></i>
+                              </button>
+                            </>
+                          )}
                         </div>
                       </td>
                     </tr>
@@ -344,23 +385,36 @@ export default function Reports({ onNavigate, onAnalysisComplete, mode = 'histor
                   </div>
 
                   <div className="mobile-card-actions">
-                    <button
-                      type="button"
-                      className="btn btn-sm btn-primary mobile-btn-flex"
-                      onClick={() => viewAnalysis(item.analysis_id)}
-                    >
-                      <i className="fas fa-file-waveform" aria-hidden="true"></i>
-                      <span>View Report</span>
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-sm btn-outline"
-                      onClick={() => handleDownload(item)}
-                      aria-label="Download PDF"
-                      disabled={downloadingId === item.analysis_id}
-                    >
-                      <i className="fas fa-download" aria-hidden="true"></i>
-                    </button>
+                    {isFailedAnalysis(item) ? (
+                      <button
+                        type="button"
+                        className="btn btn-sm btn-outline btn-failed-report mobile-btn-flex"
+                        onClick={() => showToast('This analysis could not be completed. Please upload a valid dermoscopic skin image and try again.', 'warning')}
+                      >
+                        <i className="fas fa-triangle-exclamation" aria-hidden="true"></i>
+                        <span>Invalid Image</span>
+                      </button>
+                    ) : (
+                      <>
+                        <button
+                          type="button"
+                          className="btn btn-sm btn-primary mobile-btn-flex"
+                          onClick={() => viewAnalysis(item.analysis_id, item)}
+                        >
+                          <i className="fas fa-file-waveform" aria-hidden="true"></i>
+                          <span>View Report</span>
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-sm btn-outline"
+                          onClick={() => handleDownload(item)}
+                          aria-label="Download PDF"
+                          disabled={downloadingId === item.analysis_id}
+                        >
+                          <i className="fas fa-download" aria-hidden="true"></i>
+                        </button>
+                      </>
+                    )}
                   </div>
                 </div>
               );

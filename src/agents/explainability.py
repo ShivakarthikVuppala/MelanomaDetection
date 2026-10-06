@@ -227,34 +227,49 @@ IMPORTANT GUIDELINES:
 - Clearly distinguish model output, computed image measurements, retrieved evidence, and generated explanation.
 - If features contradict the classification, note the discrepancy.
 - Always include the disclaimer that this is an AI-assisted analysis, not a clinical diagnosis.
-- Keep the total response under 400 words.
-- Separate each section with the section header in bold."""
+- Keep the total response under 450 words.
+- Output ONLY the 6 numbered sections. Begin each section on its own line with its bold header exactly as specified above (e.g. "**1. WHAT THIS MEANS**"), followed by a blank line, then the section content. Do not add any preamble or closing remarks outside the 6 sections."""
 
         return prompt
 
     def _parse_llm_response(
         self, response_text: str, diagnosis_result, evidence: List[Any]
     ) -> ExplanationResult:
-        """Parse the LLM's natural language response into an ExplanationResult."""
+        """Parse the LLM's natural language response into an ExplanationResult.
+
+        Preserves section headers and body text as separate reasoning entries so
+        the frontend can render headers distinctly from paragraph content.
+        """
         diag = diagnosis_result
         confidence = diag.diagnosis.confidence
         prediction = diag.diagnosis.prediction
 
-        # Extract sections as reasoning steps
+        # Split on blank lines to get paragraphs, then further split off leading
+        # bold headers so headers and their body text appear as separate items.
         reasoning = []
-        current_section = []
-        for line in response_text.strip().split("\n"):
-            stripped = line.strip()
-            if not stripped:
-                if current_section:
-                    reasoning.append(" ".join(current_section))
-                    current_section = []
+        # Section-header pattern: optional leading number+dot, then ** ... **
+        header_re = re.compile(r"^(\*\*[^*]+\*\*):?\s*")
+        for paragraph in response_text.strip().split("\n\n"):
+            lines = [l.strip() for l in paragraph.strip().split("\n") if l.strip()]
+            if not lines:
                 continue
-            # Clean markdown bold markers for cleaner display
-            current_section.append(stripped)
-
-        if current_section:
-            reasoning.append(" ".join(current_section))
+            # Check if first line is a standalone header
+            first = lines[0]
+            m = header_re.match(first)
+            if m and (len(first) == m.end() or first[m.end():m.end()+1] in ("", " ")):
+                # Emit the header as its own item (keep ** so frontend regex sees it)
+                reasoning.append(first)
+                # Everything after header on the same line + remaining lines = body
+                remainder = first[m.end():].strip()
+                body_lines = []
+                if remainder:
+                    body_lines.append(remainder)
+                body_lines.extend(lines[1:])
+                if body_lines:
+                    reasoning.append(" ".join(body_lines))
+            else:
+                # No standalone header — join the whole paragraph
+                reasoning.append(" ".join(lines))
 
         # Build citations from evidence
         citations = []
