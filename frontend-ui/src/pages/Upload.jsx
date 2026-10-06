@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useRef, useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useToast } from '../components/Toast';
 import { useAuth } from '../components/AuthContext';
@@ -63,6 +63,9 @@ export default function Upload({ onAnalysisComplete, onNavigate }) {
   const [instructionsAcknowledged, setInstructionsAcknowledged] = useState(false);
 
   const [file, setFile] = useState(null);
+  const [historicalFiles, setHistoricalFiles] = useState([]);
+  const [historyRecords, setHistoryRecords] = useState([]);
+  const [selectedHistoryIds, setSelectedHistoryIds] = useState(new Set());
   const [preview, setPreview] = useState(null);
   const [dragOver, setDragOver] = useState(false);
   const [error, setError] = useState(null);
@@ -75,6 +78,19 @@ export default function Upload({ onAnalysisComplete, onNavigate }) {
   // Optional contextual location
   const [lesionLocation, setLesionLocation] = useState('Arm');
   const [notes, setNotes] = useState('');
+
+  useEffect(() => {
+    if (token) {
+      fetch('/api/analyses', { headers: { Authorization: `Bearer ${token}` } })
+        .then(res => res.ok ? res.json() : [])
+        .then(data => {
+          if (Array.isArray(data)) {
+            setHistoryRecords(data.slice(0, 6)); // Show recent 6
+          }
+        })
+        .catch(err => console.error("Failed to load history", err));
+    }
+  }, [token]);
 
   const selectFile = useCallback(async (candidate) => {
     if (!candidate) return;
@@ -99,6 +115,7 @@ export default function Upload({ onAnalysisComplete, onNavigate }) {
   const clearFile = () => {
     if (preview) URL.revokeObjectURL(preview);
     setFile(null);
+    setHistoricalFiles([]);
     setPreview(null);
     setError(null);
     setWorkflowState('idle');
@@ -139,6 +156,14 @@ export default function Upload({ onAnalysisComplete, onNavigate }) {
           notes: notes.trim(),
         };
         formData.append('clinical_context_json', JSON.stringify(clinicalCtx));
+      }
+
+      historicalFiles.forEach(hf => {
+        formData.append('historical_files', hf);
+      });
+
+      if (selectedHistoryIds.size > 0) {
+        formData.append('historical_analysis_ids', JSON.stringify(Array.from(selectedHistoryIds)));
       }
 
       const result = await new Promise((resolve, reject) => {
@@ -470,6 +495,72 @@ export default function Upload({ onAnalysisComplete, onNavigate }) {
                         onChange={(e) => setNotes(e.target.value)}
                         style={{ resize: 'vertical', minHeight: '80px' }}
                       />
+                    </div>
+
+                    {/* Historical Images for Evolution */}
+                    <div className="upload-context-section" style={{ background: 'var(--bg-card)', padding: '16px', borderRadius: '12px', border: '1px dashed var(--primary)', marginTop: '24px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', marginBottom: '12px' }}>
+                        <div style={{ background: 'var(--primary-bg)', color: 'var(--primary)', width: '32px', height: '32px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', marginRight: '12px' }}>
+                          <i className="fas fa-clock-rotate-left"></i>
+                        </div>
+                        <div>
+                          <label className="context-label" style={{ marginBottom: '2px', color: 'var(--primary)', fontSize: '15px' }}>Longitudinal Tracking (Evolution)</label>
+                          <div style={{ color: 'var(--text-muted)', fontSize: '13px' }}>Select previous checks to assess temporal changes in the lesion</div>
+                        </div>
+                      </div>
+
+                      {historyRecords.length > 0 && (
+                        <div style={{ marginBottom: '16px' }}>
+                          <div style={{ fontSize: '13px', fontWeight: '500', marginBottom: '8px', color: 'var(--text-secondary)' }}>Select from your history:</div>
+                          <div style={{ display: 'flex', gap: '10px', overflowX: 'auto', paddingBottom: '8px' }}>
+                            {historyRecords.map(record => {
+                              const isSelected = selectedHistoryIds.has(record.analysis_id);
+                              return (
+                                <div 
+                                  key={record.analysis_id}
+                                  onClick={() => {
+                                    const next = new Set(selectedHistoryIds);
+                                    if (next.has(record.analysis_id)) next.delete(record.analysis_id);
+                                    else next.add(record.analysis_id);
+                                    setSelectedHistoryIds(next);
+                                  }}
+                                  style={{
+                                    flex: '0 0 auto', width: '70px', height: '70px', borderRadius: '8px', cursor: 'pointer',
+                                    border: isSelected ? '2px solid var(--primary)' : '1px solid var(--border)',
+                                    background: `url(/static/uploads/${record.analysis_id}.png) center/cover`,
+                                    position: 'relative', opacity: isSelected ? 1 : 0.7, transition: 'all 0.2s'
+                                  }}
+                                >
+                                  {isSelected && (
+                                    <div style={{ position: 'absolute', top: '-6px', right: '-6px', background: 'var(--primary)', color: '#fff', borderRadius: '50%', width: '20px', height: '20px', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '12px' }}>
+                                      <i className="fas fa-check"></i>
+                                    </div>
+                                  )}
+                                </div>
+                              )
+                            })}
+                          </div>
+                        </div>
+                      )}
+
+                      <div style={{ fontSize: '13px', fontWeight: '500', marginBottom: '8px', color: 'var(--text-secondary)' }}>Or upload from computer:</div>
+                      <input
+                        type="file"
+                        multiple
+                        accept=".jpeg,.jpg,.png,.webp,image/jpeg,image/png,image/webp"
+                        onChange={(e) => {
+                          if (e.target.files?.length) {
+                            setHistoricalFiles(Array.from(e.target.files));
+                          }
+                        }}
+                        style={{ display: 'block', fontSize: '14px', width: '100%', padding: '8px', background: 'var(--bg-main)', borderRadius: '6px', border: '1px solid var(--border)' }}
+                      />
+                      {(historicalFiles.length > 0 || selectedHistoryIds.size > 0) && (
+                        <div style={{ marginTop: '12px', fontSize: '13px', color: 'var(--primary)', fontWeight: '500', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                          <i className="fas fa-check-circle"></i>
+                          {historicalFiles.length + selectedHistoryIds.size} historical image(s) selected for temporal comparison
+                        </div>
+                      )}
                     </div>
 
                     {/* Analyze Action */}

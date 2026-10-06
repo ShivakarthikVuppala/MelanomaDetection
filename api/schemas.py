@@ -154,6 +154,39 @@ class ReportOut(BaseModel):
     report_html: Optional[str] = None
 
 
+
+
+# ---------------------------------------------------------------------------
+# Evolution Assessment schemas
+# ---------------------------------------------------------------------------
+
+class EvolutionChangesOut(BaseModel):
+    size: str = "Not assessed"
+    shape: str = "Not assessed"
+    color: str = "Not assessed"
+    structure: str = "Not assessed"
+    other: str = "Not assessed"
+
+
+class EvolutionComparisonOut(BaseModel):
+    images_compared: int
+    time_interval: str
+    same_lesion_confidence: float
+
+
+class EvolutionOut(BaseModel):
+    status: str
+    confidence: float
+    observations: List[str] = Field(default_factory=list)
+    changes: EvolutionChangesOut = Field(default_factory=EvolutionChangesOut)
+    comparison: EvolutionComparisonOut
+    limitations: List[str] = Field(default_factory=list)
+
+
+class EvolutionRequest(BaseModel):
+    analysis_ids: List[str]
+    timestamps: Optional[List[Optional[str]]] = None
+
 # ---------------------------------------------------------------------------
 # Full pipeline response
 # ---------------------------------------------------------------------------
@@ -167,6 +200,7 @@ class AnalysisResponse(BaseModel):
     evidence: Optional[List[MedicalEvidenceOut]] = None
     explanation: Optional[ExplanationOut] = None
     report: Optional[ReportOut] = None
+    evolution_assessment: Optional[EvolutionOut] = None
     original_image_url: Optional[str] = None
     flags: List[str] = Field(default_factory=list)
     error_code: Optional[str] = None

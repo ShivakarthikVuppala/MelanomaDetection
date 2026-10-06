@@ -1,6 +1,6 @@
 # CaseState Agent Architecture
 
-`SupervisorAgent` runs a bounded decision loop. It records public operational
+`OrchestratorAgent` runs a bounded decision loop. It records public operational
 metadata (`agent`, `action`, `result`, `reason_category`, timestamp and small
 state details), never private reasoning.
 
@@ -12,17 +12,17 @@ observe CaseState -> choose action -> invoke one tool/agent -> update CaseState
 
 ## Top-Level Agents
 
-The system has exactly **three** top-level agents orchestrated by the Supervisor:
+The system has exactly **three** top-level agents orchestrated by the Orchestrator:
 
 | Concern | Owner | Contract |
 |---|---|---|
 | Image quality, Swin, SegFormer, CV, Grad-CAM, calibration | **Vision Agent** | validated observations and raw measurements |
 | Medical sources and coverage gaps | **Evidence Agent** | untrusted evidence records and bounded sufficiency assessment |
 | Output | **Report Agent** | validated JSON plus optional PDF rendering |
-| Routing | **Supervisor Agent** | selected action and concise execution trace |
+| Routing | **Orchestrator Agent** | selected action and concise execution trace |
 
 ```text
-Supervisor Agent
+Orchestrator Agent
     |
     ├── Vision Agent
     │     ├── Swin Transformer — Classification  ─┐
@@ -42,7 +42,7 @@ Supervisor Agent
 ## Clinical Context Handling
 
 Clinical context (evolution history, patient-reported symptoms) is managed
-as an **internal utility** of the Supervisor workflow, not a separate
+as an **internal utility** of the Orchestrator workflow, not a separate
 top-level agent. The `clinical_context` module normalises supplied history,
 populates the ABCDE "E" feature, and emits missing-information questions.
 It never fabricates patient history from image data.

@@ -38,6 +38,7 @@ from .schemas import (
     SegmentationInfoOut, ExplainabilityInfoOut, PreprocessingInfoOut,
     PipelineInfoOut, MetadataInfoOut, MedicalEvidenceOut,
     ExplanationOut, ReportOut, PreprocessResponse, ScaleCalibrationOut,
+    EvolutionOut, EvolutionChangesOut, EvolutionComparisonOut,
 )
 
 logger = logging.getLogger(__name__)
@@ -139,7 +140,7 @@ def _configured_model_paths() -> tuple[Path, Path]:
     )
     classification_path = _resolve_project_path(
         paths.get("classification_checkpoint"),
-        PROJECT_ROOT / "checkpoints" / "best_swin_checkpoint_v2.pth",
+        PROJECT_ROOT / "checkpoints" / "best_swin_checkpoint.pth",
     )
     segmentation_path = _resolve_project_path(
         config.get("segmentation", {}).get("checkpoint"),
@@ -158,8 +159,8 @@ def _get_supervisor():
     if _supervisor_instance is None:
         with _supervisor_init_lock:
             if _supervisor_instance is None:
-                from src.agents.supervisor import SupervisorAgent
-                _supervisor_instance = SupervisorAgent(str(PROJECT_ROOT / "config.yaml"))
+                from src.agents.orchestrator import OrchestratorAgent
+                _supervisor_instance = OrchestratorAgent(str(PROJECT_ROOT / "config.yaml"))
                 logger.info("Supervisor Agent initialized")
     return _supervisor_instance
 
@@ -345,6 +346,19 @@ def _workflow_to_response(state, original_image_url: Optional[str]) -> AnalysisR
     if state.report_result is not None and state.report_result.pdf_path:
         report.pdf_url = _output_url(state.report_result.pdf_path, "reports")
 
+    evolution_assessment = None
+    if "evolution" in state.clinical_context and isinstance(state.clinical_context["evolution"], dict):
+        ev_dict = state.clinical_context["evolution"]
+        if "status" in ev_dict:
+            evolution_assessment = EvolutionOut(
+                status=ev_dict.get("status", "unable_to_assess"),
+                confidence=ev_dict.get("confidence", 0.0),
+                observations=ev_dict.get("observations", []),
+                changes=EvolutionChangesOut(**ev_dict.get("changes", {})),
+                comparison=EvolutionComparisonOut(**ev_dict.get("comparison", {})),
+                limitations=ev_dict.get("limitations", []),
+            )
+
     return AnalysisResponse(
         analysis_id=state.analysis_id,
         status=state.overall_status,
@@ -353,6 +367,7 @@ def _workflow_to_response(state, original_image_url: Optional[str]) -> AnalysisR
         evidence=evidence,
         explanation=explanation,
         report=report,
+        evolution_assessment=evolution_assessment,
         original_image_url=original_image_url,
         flags=state.flags,
         error_code=state.error_code,
@@ -566,10 +581,12 @@ async def _save_analysis(analysis: AnalysisResponse, user_id: str = ""):
 @app.post("/api/analyze", response_model=AnalysisResponse)
 async def analyze_image(
     file: UploadFile = File(...),
+    historical_files: list[UploadFile] = File(default=[]),
     scale_method: str = Form("auto"),
     scale_reference_mm: Optional[float] = Form(None),
     scale_reference_key: Optional[str] = Form(None),
     clinical_context_json: Optional[str] = Form(None),
+    historical_analysis_ids: Optional[str] = Form(None),
     current_user: dict = Depends(get_current_user),
 ):
     """Run the canonical Supervisor Agent workflow for one image/case.
@@ -605,6 +622,32 @@ async def analyze_image(
             "error_code": "image_decode_failed",
             "message": "The selected file is not a readable image. Please choose another image.",
         })
+
+    historical_image_paths = []
+    for idx, hfile in enumerate(historical_files or []):
+        if not hfile.filename: continue
+        hfile_path = UPLOADS_DIR / f"{analysis_id}_hist_{idx}.png"
+        try:
+            hcontents = await hfile.read(MAX_UPLOAD_BYTES + 1)
+            with Image.open(io.BytesIO(hcontents)) as hcand:
+                hcand.verify()
+            with Image.open(io.BytesIO(hcontents)) as hcand:
+                himg = hcand.convert("RGB")
+                himg.save(hfile_path, format="PNG", optimize=True)
+            historical_image_paths.append(str(hfile_path))
+        except Exception:
+            logger.warning(f"Failed to process historical image {idx}")
+
+    if historical_analysis_ids:
+        try:
+            hist_ids = json.loads(historical_analysis_ids)
+            if isinstance(hist_ids, list):
+                for hist_id in hist_ids:
+                    hist_path = UPLOADS_DIR / f"{hist_id}.png"
+                    if hist_path.exists():
+                        historical_image_paths.append(str(hist_path))
+        except Exception as e:
+            logger.warning(f"Failed to parse historical_analysis_ids: {e}")
 
     # Reject images that are technically unusable before the expensive pipeline.
     # This catches blank, overexposed, extremely blurry, wrong-resolution, or
@@ -655,6 +698,7 @@ async def analyze_image(
             scale_reference_mm=scale_reference_mm,
             scale_reference_key=scale_reference_key,
             clinical_context=clinical_context,
+            historical_images=historical_image_paths,
         )
         analysis = _workflow_to_response(state, original_image_url)
     except Exception:

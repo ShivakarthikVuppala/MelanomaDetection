@@ -11,7 +11,7 @@ is solely to validate that the classifier attends to the lesion
 region rather than background artifacts (hair, rulers, ink marks).
 
 Usage:
-    gradcam = SwinGradCAM("checkpoints/best_swin_checkpoint_v2.pth")
+    gradcam = SwinGradCAM("checkpoints/best_swin_checkpoint.pth")
     result = gradcam.generate("image.jpg")
     gradcam.save_visualization("image.jpg", "outputs/gradcam_samples/")
 """
@@ -39,7 +39,7 @@ class SwinGradCAM:
     influenced the classification decision.
 
     Args:
-        checkpoint_path: Path to trained best_swin_checkpoint_v2.pth.
+        checkpoint_path: Path to trained best_swin_checkpoint.pth.
         model_name: timm model identifier.
         img_size: Input image size.
         device: Torch device (auto-detected if None).

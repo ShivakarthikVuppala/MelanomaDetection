@@ -64,6 +64,6 @@ rag_pipeline/documents_metadata.json
 test_images/
 PDFS/
 git_diff_output.txt
-
+tests/
 # ── Windows system files ──────────────────────────────────
 desktop.ini

@@ -88,7 +88,7 @@ export default function Results({ analysisResult, onNavigate }) {
     );
   }
 
-  const { diagnosis, explanation, report, original_image_url, analysis_id, timestamp, _customContext } = currentResult;
+  const { diagnosis, explanation, report, evolution_assessment, original_image_url, analysis_id, timestamp, _customContext } = currentResult;
   const pred = diagnosis?.diagnosis?.prediction || 'Benign';
   const isMelanoma = pred === 'Melanoma';
   const confidence = Math.round(diagnosis?.diagnosis?.confidence || 0);
@@ -456,14 +456,33 @@ export default function Results({ analysisResult, onNavigate }) {
                 <div className="abcde-circle-badge">E</div>
                 <div>
                   <h3 className="abcde-item-title">E &mdash; Evolution</h3>
-                  <span className="abcde-item-metric">Assessment: <strong>{_customContext?.notes ? 'Patient History Provided' : 'Baseline Documented'}</strong></span>
+                  <span className="abcde-item-metric">Assessment: <strong>{evolution_assessment ? (evolution_assessment.status === 'clear_evolution' ? 'Clear Evolution' : evolution_assessment.status === 'possible_evolution' ? 'Possible Evolution' : evolution_assessment.status === 'no_significant_evolution' ? 'No Significant Evolution' : 'Unable to Assess') : (_customContext?.notes ? 'Patient History Provided' : 'Baseline Documented')}</strong></span>
                 </div>
               </div>
-              <p className="abcde-item-explanation">
-                {_customContext?.notes
-                  ? `Reported observation: "${_customContext.notes}". Continued tracking of any changes in shape, size, elevation, or sensation is recommended.`
-                  : 'Documenting this skin check establishes a baseline. Note any future changes in size, contour, elevation, or symptoms like itching.'}
-              </p>
+              <div className="abcde-item-explanation">
+                {evolution_assessment ? (
+                  <div style={{ marginTop: '8px' }}>
+                    <p style={{ margin: '0 0 8px 0', color: 'var(--text-primary)' }}><strong>AI Longitudinal Comparison:</strong> {evolution_assessment.observations?.join(' ')}</p>
+                    <ul style={{ margin: '0 0 8px 16px', padding: '0', fontSize: '13px' }}>
+                      <li><strong>Size:</strong> {evolution_assessment.changes?.size}</li>
+                      <li><strong>Shape/Border:</strong> {evolution_assessment.changes?.shape}</li>
+                      <li><strong>Color:</strong> {evolution_assessment.changes?.color}</li>
+                      <li><strong>Structure:</strong> {evolution_assessment.changes?.structure}</li>
+                    </ul>
+                    {evolution_assessment.limitations && evolution_assessment.limitations.length > 0 && (
+                      <p style={{ margin: '0', fontSize: '12px', color: 'var(--text-muted)' }}>
+                        <em>Note: {evolution_assessment.limitations[0]}</em>
+                      </p>
+                    )}
+                  </div>
+                ) : (
+                  <p>
+                    {_customContext?.notes
+                      ? `Reported observation: "${_customContext.notes}". Continued tracking of any changes in shape, size, elevation, or sensation is recommended.`
+                      : 'Documenting this skin check establishes a baseline. Note any future changes in size, contour, elevation, or symptoms like itching.'}
+                  </p>
+                )}
+              </div>
             </div>
           </div>
         </section>

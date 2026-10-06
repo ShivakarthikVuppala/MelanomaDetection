@@ -43,7 +43,7 @@ def test_image_path():
 @pytest.fixture(scope="module")
 def swin_checkpoint_path(config):
     paths = config.get("paths", {})
-    path = paths.get("classification_checkpoint", "checkpoints/best_swin_checkpoint_v2.pth")
+    path = paths.get("classification_checkpoint", "checkpoints/best_swin_checkpoint.pth")
     full_path = PROJECT_ROOT / path
     if not full_path.is_file():
         pytest.skip(f"Swin checkpoint not found: {full_path}")
@@ -332,7 +332,7 @@ class TestParallelPipeline:
         preproc_cfg = config.get("preprocessing", {})
 
         swin_path = str(PROJECT_ROOT / paths.get("classification_checkpoint",
-                        "checkpoints/best_swin_checkpoint_v2.pth"))
+                        "checkpoints/best_swin_checkpoint.pth"))
         seg_path = str(PROJECT_ROOT / seg_cfg["checkpoint"])
 
         if not Path(swin_path).is_file() or not Path(seg_path).is_file():

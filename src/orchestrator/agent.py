@@ -1,7 +1,7 @@
-"""Compatibility import for the state-driven Supervisor Agent.
+"""Compatibility import for the state-driven Orchestrator Agent.
 
 The fixed four-phase orchestrator was removed. New code should import
-``SupervisorAgent`` from ``src.agents``.
+``OrchestratorAgent`` from ``src.agents``.
 """
-from ..agents.supervisor import SupervisorAgent
-__all__ = ["SupervisorAgent"]
+from ..agents.orchestrator import OrchestratorAgent
+__all__ = ["OrchestratorAgent"]

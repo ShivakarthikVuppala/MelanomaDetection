@@ -77,7 +77,7 @@ class ActionStatus:
 
 @dataclass
 class CaseState:
-    """The only mutable case contract used by the supervisor and agents."""
+    """The only mutable case contract used by the orchestrator and agents."""
     analysis_id: str
     image_path: str
     image_metadata: Dict[str, Any] = field(default_factory=dict)
@@ -100,6 +100,7 @@ class CaseState:
     agent_decisions: List[ExecutionTrace] = field(default_factory=list)
     tool_executions: List[ExecutionTrace] = field(default_factory=list)
     action_status: Dict[str, ActionStatus] = field(default_factory=dict)
+    historical_images: List[str] = field(default_factory=list)
     flags: List[str] = field(default_factory=list)
     status: Literal["pending", "running", "needs_clinical_context", "completed", "failed"] = "pending"
     error_code: Optional[str] = None
@@ -109,6 +110,7 @@ class CaseState:
     retrieved_evidence: List[EvidenceRecord] = field(default_factory=list)
     explanation_result: Any = None
     report_result: Any = None
+    fusion_result: Any = None  # FusionResult from ABCDEFusionScorer
 
     @property
     def overall_status(self) -> str:

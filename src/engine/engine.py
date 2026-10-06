@@ -74,12 +74,12 @@ class CoreDiagnosisEngine:
         )
 
         # Classifier — prefer explicit classification_checkpoint; fall back to
-        # legacy best_swin_checkpoint_v2.pth inside the checkpoints folder.
+        # legacy best_swin_checkpoint.pth inside the checkpoints folder.
         project_root = Path(self.config_path).parent
         if paths.get("classification_checkpoint"):
             checkpoint = str(project_root / paths["classification_checkpoint"])
         else:
-            checkpoint = str(project_root / "checkpoints" / "best_swin_checkpoint_v2.pth")
+            checkpoint = str(project_root / "checkpoints" / "best_swin_checkpoint.pth")
         self.classifier = SwinV2Predictor(
             checkpoint_path=checkpoint,
             model_name=cls_cfg["model_name"],

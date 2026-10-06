@@ -96,7 +96,7 @@ def main():
             datefmt="%H:%M:%S",
         )
 
-        from src.agents.supervisor import SupervisorAgent
+        from src.agents.orchestrator import OrchestratorAgent
 
         image_path = sys.argv[2]
         print(f"\n{'='*60}")
@@ -104,7 +104,7 @@ def main():
         print(f"  Image: {image_path}")
         print(f"{'='*60}\n")
 
-        supervisor = SupervisorAgent("config.yaml")
+        supervisor = OrchestratorAgent("config.yaml")
         state = supervisor.run(image_path, save_mask=True)
 
         # Print results summary
@@ -164,7 +164,7 @@ def main():
             return path if path.is_absolute() else config_file.parent / path
         _ckpt = _resolve(
             _paths.get("classification_checkpoint"),
-            str(Path("checkpoints") / "best_swin_checkpoint_v2.pth"),
+            str(Path("checkpoints") / "best_swin_checkpoint.pth"),
         )
         cam = SwinGradCAM(str(_ckpt))
         cam.save_visualization(
@@ -236,8 +236,8 @@ def main():
         print(f"{'='*60}\n")
 
         # Compatibility command: it now invokes the same supervisor route.
-        from src.agents.supervisor import SupervisorAgent
-        state = SupervisorAgent("config.yaml").run(image_path)
+        from src.agents.orchestrator import OrchestratorAgent
+        state = OrchestratorAgent("config.yaml").run(image_path)
         report = state.final_report or {"status": state.status, "flags": state.flags}
 
         # Display

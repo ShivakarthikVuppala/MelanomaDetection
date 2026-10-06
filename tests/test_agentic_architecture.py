@@ -1,8 +1,8 @@
-"""Architecture tests for the three-agent + Supervisor melanoma workflow.
+"""Architecture tests for the three-agent + Orchestrator melanoma workflow.
 
 These tests verify the corrected architecture:
 - Three top-level agents: Vision, Evidence, Report
-- Supervisor orchestrates the three agents
+- Orchestrator orchestrates the three agents
 - Clinical context is an internal utility, not a top-level agent
 - CaseState is the central contract
 """
@@ -13,7 +13,7 @@ from src.agents.clinical_context import ClinicalContextAgent
 from src.agents.evidence import EvidenceAgent
 from src.agents.report import ReportAgent
 from src.agents.state import CaseState, EvidenceRecord, Measurement
-from src.agents.supervisor import SupervisorAgent
+from src.agents.orchestrator import OrchestratorAgent
 from src.agents.vision import VisionAgent
 
 
@@ -100,13 +100,13 @@ def test_vision_maps_model_segmentation_gradcam_and_calibration_safely():
     assert "millimetre thresholds" in state.abcde["D"].interpretation
 
 
-# ── Supervisor workflow ──
+# ── Orchestrator workflow ──
 
-def test_supervisor_conditional_routing_and_report_output(tmp_path):
+def test_orchestrator_conditional_routing_and_report_output(tmp_path):
     config = tmp_path / "config.yaml"
-    config.write_text("quality: {}\nsupervisor: {classification_confidence_threshold: 70, max_supervisor_steps: 12}\nevidence: {max_retrieval_cycles: 2}\nreport: {}\n")
-    supervisor = SupervisorAgent(str(config), vision=FakeVision(), evidence=EvidenceAgent(2, Backend()), report=ReportAgent())
-    state = supervisor.run("image.jpg")
+    config.write_text("quality: {}\norchestrator: {classification_confidence_threshold: 70, max_orchestrator_steps: 12}\nevidence: {max_retrieval_cycles: 2}\nreport: {}\n")
+    orchestrator = OrchestratorAgent(str(config), vision=FakeVision(), evidence=EvidenceAgent(2, Backend()), report=ReportAgent())
+    state = orchestrator.run("image.jpg")
     actions = [event.action for event in state.agent_decisions]
     assert state.status == "completed"
     assert "request_clinical_context" in actions
@@ -132,8 +132,8 @@ def test_report_requires_validated_state_and_propagates_uncertainty():
 def test_three_agent_architecture():
     """Verify the corrected architecture has exactly three top-level agents."""
     import src.agents as agents_module
-    # __all__ should export exactly 4 names: Supervisor + 3 agents
-    assert set(agents_module.__all__) == {"SupervisorAgent", "VisionAgent", "EvidenceAgent", "ReportAgent"}
+    # __all__ should export exactly 4 names: Orchestrator + 3 agents
+    assert set(agents_module.__all__) == {"OrchestratorAgent", "VisionAgent", "EvidenceAgent", "ReportAgent"}
 
 
 def test_report_metadata_says_three_agent():
@@ -148,14 +148,14 @@ def test_report_metadata_says_three_agent():
 def test_clinical_context_not_in_top_level_all():
     """ClinicalContextAgent should be importable but not in __all__."""
     import src.agents as agents_module
-    # Should be importable (it's used internally by Supervisor)
+    # Should be importable (it's used internally by Orchestrator)
     assert hasattr(agents_module, "ClinicalContextAgent")
     # But NOT in __all__ (it's not a top-level agent)
     assert "ClinicalContextAgent" not in agents_module.__all__
 
 
-def test_supervisor_uses_clinical_context_internally():
-    """Supervisor should use clinical context functionality internally."""
-    import src.agents.supervisor as sup_module
-    # The supervisor imports and uses ClinicalContextAgent as an internal utility
+def test_orchestrator_uses_clinical_context_internally():
+    """Orchestrator should use clinical context functionality internally."""
+    import src.agents.orchestrator as sup_module
+    # The orchestrator imports and uses ClinicalContextAgent as an internal utility
     assert hasattr(sup_module, "ClinicalContextAgent")

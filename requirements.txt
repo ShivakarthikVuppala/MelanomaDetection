@@ -59,6 +59,7 @@ python-jose[cryptography]>=3.3.0
 
 # Phase 3 — LLM Explainability (Gemini)
 google-genai>=1.0.0
+google-generativeai>=0.8.0
 
 # ── Agentic RAG v4 Pipeline ──────────────────────────────
 # Core LangChain

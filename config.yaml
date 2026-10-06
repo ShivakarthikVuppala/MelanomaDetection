@@ -24,7 +24,7 @@ quality:
   min_width: 256
   min_height: 256
   max_aspect_ratio: 4.0
-  min_laplacian_variance: 5.0
+  min_laplacian_variance: 0.0
   max_extreme_pixel_ratio: 0.98
 
 # Optional planar reference metadata. Leave null when absent; no physical
@@ -59,7 +59,7 @@ classification:
   # Validation-optimized via Youden's J (sensitivity >= 0.9 floor) on the
   # Kaggle training notebook's validation set. The checkpoint also stores
   # this value, and the inference code now prefers the checkpoint's copy.
-  classification_threshold: 0.21
+  classification_threshold: 0.3775
   img_size: 256
   batch_size: 16          # Kaggle T4: 16 | Local RTX 4050: 4
   num_workers: 4
@@ -105,7 +105,7 @@ paths:
   segmentation_masks: dataset/segmentation/masks/
   checkpoints: checkpoints/
   # New model trained with Codex — used for all live inference and Grad-CAM.
-  classification_checkpoint: checkpoints/best_swin_checkpoint_v2.pth
+  classification_checkpoint: checkpoints/best_swin_checkpoint.pth
   outputs: outputs/
 
 # ---------------------------------------------------------------------------
@@ -134,12 +134,20 @@ report:
   include_evidence: true
 
 # ---------------------------------------------------------------------------
-# Supervisor Agent — Agentic Decision Thresholds
+# Orchestrator Agent — Agentic Decision Thresholds
 # ---------------------------------------------------------------------------
 orchestrator:
   classification_confidence_threshold: 70.0
   segmentation_min_area_px: 100
-  segmentation_max_area_ratio: 0.90
+  segmentation_max_area_ratio: 1.0
   gradcam_reliability_threshold: 0.30
   max_retry_attempts: 1
   max_supervisor_steps: 12
+  # ABCDE fusion weights (must sum to 1.0). Remove to use defaults.
+  abcde_weights:
+    classifier: 0.60   # Swin classifier -- primary signal
+    E: 0.15            # Evolution -- most important clinical feature
+    A: 0.08            # Asymmetry
+    B: 0.07            # Border irregularity
+    C: 0.06            # Color diversity
+    D: 0.04            # Diameter (lowest; often uncalibrated)

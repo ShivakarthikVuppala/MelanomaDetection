@@ -401,6 +401,19 @@ class ReportRenderer:
             pdf.set_font("Helvetica", "", 10)
             pdf.safe_cell(PW - 45, 6, f"{feat.score_label}  (score: {feat.score_numeric:.3f})", ln=True)
 
+            if name == "evolution" and getattr(feat, "details", None) and isinstance(feat.details, dict):
+                ev = feat.details
+                if "observations" in ev and isinstance(ev["observations"], list) and ev["observations"]:
+                    pdf.set_font("Helvetica", "I", 9)
+                    for obs in ev["observations"]:
+                        pdf.set_x(LM + 5)
+                        pdf.safe_multi_cell(PW - 5, 5, f"AI Observation: {obs}")
+                if "changes" in ev and isinstance(ev["changes"], dict):
+                    for c_key, c_val in ev["changes"].items():
+                        if c_val and str(c_val).lower() not in ("none", "null", "n/a", "no change observed"):
+                            pdf.set_x(LM + 10)
+                            pdf.safe_multi_cell(PW - 10, 5, f"- {c_key.capitalize()} change: {c_val}")
+
         if diag.clinical_interpretations.get("diameter"):
             pdf.ln(2)
             wrap(f"  Diameter: {diag.clinical_interpretations['diameter']}", h=4, size=9)

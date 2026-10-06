@@ -23,6 +23,7 @@ class FeatureScore(BaseModel):
     name: str                                     # "asymmetry", "border", "color"
     score_numeric: float = Field(ge=0.0, le=1.0)  # normalized 0.0–1.0
     score_label: str                              # "High", "Irregular", "Multiple"
+    details: Optional[Dict[str, Any]] = None      # Extra information (e.g., evolution JSON)
 
 
 class SegmentationInfo(BaseModel):
