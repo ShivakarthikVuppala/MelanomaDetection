@@ -22,7 +22,14 @@ class FakeVision:
         state.image_quality = {"accepted": True, "reason": ""}
         return state
     def analyze(self, state, **kwargs):
-        state.diagnosis_result = SimpleNamespace(model_dump=lambda **_: {"validated": True})
+        state.diagnosis_result = SimpleNamespace(
+            model_dump=lambda **_: {"validated": True},
+            diagnosis=SimpleNamespace(prediction="melanoma", confidence=62.0),
+            probabilities={"melanoma": 0.62},
+            clinical_features={},
+            measurements={"lesion": {"diameter_px": 184, "area_px": 100, "perimeter_px": 44}},
+            explainability=SimpleNamespace(attention_inside_lesion=0.8),
+        )
         state.classification = {"prediction": "melanoma", "confidence": 62.0, "probabilities": {"melanoma": .62}}
         state.uncertainty.classification = .62
         state.pixel_measurements["diameter"] = Measurement(184, "pixels", False)
