@@ -49,10 +49,21 @@ Thumbs.db
 # ── Antigravity / Gemini ──────────────────────────────────
 .gemini/
 
-# ── Node modules (frontend) ──────────────────────────────
+# ── Node modules & Frontend ──────────────────────────────
 node_modules/
-frontend/skin-arc-research-main/node_modules/
-frontend/skin-arc-research-main/dist/
+frontend/
+frontend-ui/dist/
 
-# ── Inference helper ──────────────────────────────────────
-extract_pth_from_zip.py
+# ── RAG pipeline generated data ──────────────────────────
+rag_pipeline/cleaned_documents/
+rag_pipeline/rag_pipeline/
+rag_pipeline/chunks.jsonl
+rag_pipeline/documents_metadata.json
+
+# ── Test / debug artifacts ────────────────────────────────
+test_images/
+PDFS/
+git_diff_output.txt
+
+# ── Windows system files ──────────────────────────────────
+desktop.ini

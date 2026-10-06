@@ -606,12 +606,12 @@ async def analyze_image(
             "message": "The selected file is not a readable image. Please choose another image.",
         })
 
-    # Image quality is assessed by the Vision Agent so every request follows
-    # the same CaseState workflow. Keep this code only as a removed-client
-    # compatibility branch; it is intentionally unreachable.
+    # Reject images that are technically unusable before the expensive pipeline.
+    # This catches blank, overexposed, extremely blurry, wrong-resolution, or
+    # non-dermoscopic uploads early, returning a clear actionable status.
     from src.engine.image_quality import check_image_quality
     quality = check_image_quality(image_array, **_config().get("quality", {}))
-    if False and not quality.accepted:
+    if not quality.accepted:
         file_path.unlink(missing_ok=True)
         now = datetime.now()
         analysis = AnalysisResponse(

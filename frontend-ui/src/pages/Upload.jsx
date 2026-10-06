@@ -152,6 +152,10 @@ export default function Upload({ onAnalysisComplete, onNavigate }) {
         request.onload = () => {
           const body = request.response || {};
           if (request.status >= 200 && request.status < 300) {
+            if (body.status === 'failed' || body.status === 'image_quality_insufficient' || !body.diagnosis) {
+              reject(new Error(body.message || 'The image could not be analyzed. Please upload a clear, focused photo of a skin lesion.'));
+              return;
+            }
             resolve(body);
           } else {
             reject(new Error(body.detail?.message || 'The image could not be analyzed. Please try again.'));
