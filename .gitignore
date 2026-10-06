@@ -1,58 +1,58 @@
-# Environment variables — DO NOT COMMIT
+# ── Environment & Secrets (NEVER push these) ─────────────
 .env
 *.env
 
-# Python
+# ── Python ────────────────────────────────────────────────
+melanoma_env/
+.venv/
 __pycache__/
 *.pyc
 *.pyo
 .pytest_cache/
-melanoma_env/
-.venv/
 *.egg-info/
 dist/
 build/
 
-# IDE
+# ── Model weights and checkpoints ──
+checkpoints/
+*.pt
+*.pth
+models/
+
+# ── Datasets ──────────────────────────────────────────────
+dataset/
+data/
+
+# ── Qdrant local data ─────────────────────────────────────
+qdrant_data/
+rag_pipeline/cleaned_documents/
+
+# ── Temporary files & Outputs ─────────────────────────────
+temp_uploads/
+*.log
+evaluation_results.json
+outputs/*
+!outputs/.keep
+uploads/*
+!uploads/.keep
+
+# ── IDE ───────────────────────────────────────────────────
 .vscode/
 .idea/
 *.swp
 *.swo
 
-# Checkpoints (large model files)
-checkpoints/
-chk_pt/
-codex-model/
-models/
+# ── OS files ──────────────────────────────────────────────
+Thumbs.db
+.DS_Store
 
-# Data and Databases
-dataset/
-data/
+# ── Antigravity / Gemini ──────────────────────────────────
+.gemini/
 
-# Node
+# ── Node modules (frontend) ──────────────────────────────
 node_modules/
 frontend/skin-arc-research-main/node_modules/
 frontend/skin-arc-research-main/dist/
 
-# Outputs and Uploads
-outputs/*
-!outputs/.keep
-uploads/*
-!uploads/.keep
-temp_uploads/
-*.log
-evaluation_results.json
-
-# OS
-.DS_Store
-Thumbs.db
-
-# RAG Data
-qdrant_data/
-rag_pipeline/cleaned_documents/
-
-# Inference helper
+# ── Inference helper ──────────────────────────────────────
 extract_pth_from_zip.py
-
-# Antigravity / Gemini
-.gemini/
