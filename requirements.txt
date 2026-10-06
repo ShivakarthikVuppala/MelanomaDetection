@@ -12,11 +12,14 @@ timm>=1.0.0
 albumentations==2.0.8
 # Includes cv2.aruco / ChArUco used for validated metric scale calibration.
 opencv-contrib-python-headless>=4.10.0
+opencv-python>=4.10.0
 scikit-image>=0.24.0
 scikit-learn>=1.5.0
 
 # Data & Config
 pydantic>=2.0.0
+pydantic-settings>=2.0.0
+python-dotenv>=1.0.0
 numpy>=1.26.0
 Pillow>=10.0.0
 pandas>=2.2.0
@@ -35,7 +38,8 @@ grad-cam>=1.5.0
 
 # Phase 2 — Medical Evidence Retrieval
 sentence-transformers>=3.0.0
-qdrant-client>=1.9.0
+qdrant-client>=1.12.0
+fastembed>=0.4.0
 
 # Phase 4 — Report Generation
 fpdf2>=2.8.0
@@ -43,8 +47,10 @@ fpdf2>=2.8.0
 # API Server
 fastapi>=0.115.0
 uvicorn[standard]>=0.30.0
-python-multipart>=0.0.9
+python-multipart>=0.0.12
 motor>=3.3.0
+slowapi>=0.1.9
+sse-starlette>=2.0.0
 
 # Authentication
 bcrypt>=4.0.0
@@ -54,14 +60,12 @@ python-jose[cryptography]>=3.3.0
 google-genai>=1.0.0
 
 # ── Agentic RAG v4 Pipeline ──────────────────────────────
+# Core LangChain
 langchain>=0.3.0
 langchain-community>=0.3.0
 langchain-google-genai>=2.0.0
 langchain-qdrant>=0.2.0
 langchain-text-splitters>=0.3.0
-fastembed>=0.4.0
-pydantic-settings>=2.0.0
-python-dotenv>=1.0.0
 
 # NLP & Search
 rank-bm25>=0.2.2
@@ -70,10 +74,6 @@ nltk>=3.9.0
 # PDF Parsing
 PyMuPDF>=1.24.0
 pypdf>=5.0.0
-
-# API extras (RAG)
-slowapi>=0.1.9
-sse-starlette>=2.0.0
 
 # RAG Evaluation
 ragas>=0.2.0

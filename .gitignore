@@ -1,11 +1,23 @@
 # Environment variables — DO NOT COMMIT
 .env
+*.env
 
 # Python
 __pycache__/
 *.pyc
 *.pyo
 .pytest_cache/
+melanoma_env/
+.venv/
+*.egg-info/
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
 
 # Checkpoints (large model files)
 checkpoints/
@@ -19,12 +31,17 @@ data/
 
 # Node
 node_modules/
+frontend/skin-arc-research-main/node_modules/
+frontend/skin-arc-research-main/dist/
 
 # Outputs and Uploads
 outputs/*
 !outputs/.keep
 uploads/*
 !uploads/.keep
+temp_uploads/
+*.log
+evaluation_results.json
 
 # OS
 .DS_Store
@@ -34,5 +51,8 @@ Thumbs.db
 qdrant_data/
 rag_pipeline/cleaned_documents/
 
-#inference helper
+# Inference helper
 extract_pth_from_zip.py
+
+# Antigravity / Gemini
+.gemini/
