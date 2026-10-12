@@ -172,10 +172,6 @@ curl -X POST http://localhost:8000/api/analyze \
 
 Issues and pull requests are welcome. Please run `python -m pytest -q` before submitting.
 
-## License
-
-TODO: add a license (e.g. MIT) and a `LICENSE` file.
-
 ## Acknowledgements
 
 ISIC Archive, Hugging Face Transformers, Qdrant, and the authors of SwinV2 and SegFormer. TODO: add your mentor/institution if desired.
