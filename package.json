@@ -37,7 +37,14 @@
     "type": "git",
     "url": "git+https://github.com/ShivakarthikVuppala/MelanomaDetection.git"
   },
-  "author": "",
+  "author": "Shivakarthik Vuppala",
+  "contributors": [
+    {
+      "name": "Sairam Nellutla",
+      "email": "sairamnellutla26@gmail.com",
+      "url": "https://github.com/sairam0124h"
+    }
+  ],
   "license": "ISC",
   "bugs": {
     "url": "https://github.com/ShivakarthikVuppala/MelanomaDetection/issues"

@@ -172,6 +172,11 @@ curl -X POST http://localhost:8000/api/analyze \
 
 Issues and pull requests are welcome. Please run `python -m pytest -q` before submitting.
 
+## Authors & Collaborators
+
+- **Shivakarthik Vuppala** ([@ShivakarthikVuppala](https://github.com/ShivakarthikVuppala))
+- **Sairam Nellutla** ([@sairam0124h](https://github.com/sairam0124h)) - `sairamnellutla26@gmail.com`
+
 ## Acknowledgements
 
-ISIC Archive, Hugging Face Transformers, Qdrant, and the authors of SwinV2 and SegFormer. TODO: add your mentor/institution if desired.
+ISIC Archive, Hugging Face Transformers, Qdrant, and the authors of SwinV2 and SegFormer.
