@@ -32,16 +32,24 @@ class EvidenceAgent:
     def retrieve_evidence(self, state: CaseState, evidence_goal: str) -> CaseState:
         try:
             backend = self._backend_instance()
-            queries, accumulated, assessment = self._plan_queries(state, evidence_goal, backend), list(state.evidence), EvidenceAssessment()
-            for cycle in range(1, self.max_cycles + 1):
-                cycle_queries = queries if cycle == 1 else assessment.follow_up_queries
-                if not cycle_queries: break
-                documents = []
-                for query in cycle_queries: documents.extend(backend.hybrid_search(query))
-                accumulated = self._deduplicate(accumulated, documents, evidence_goal, cycle)
-                assessment = self._evaluate(state, accumulated, evidence_goal, cycle)
-                state.record(self.name, "retrieve_evidence", "sufficient" if assessment.sufficient else "follow_up_required", "evidence_gap", {"cycle": cycle, "goal": evidence_goal, "missing": assessment.missing}, tool=True)
-                if assessment.sufficient: break
+            current_completed = getattr(state.evidence_assessment, "cycles_completed", 0)
+            is_targeted = bool(evidence_goal and evidence_goal not in {"ABCDE", "differential", "measurement", "clinical_guidelines"})
+            queries = self._plan_queries(state, evidence_goal, backend, is_targeted=is_targeted)
+            accumulated = list(state.evidence)
+            documents = []
+            for query in queries:
+                documents.extend(backend.hybrid_search(query))
+            cycle = current_completed + 1
+            accumulated = self._deduplicate(accumulated, documents, evidence_goal, cycle)
+            assessment = self._evaluate(state, accumulated, evidence_goal, cycle)
+            state.record(
+                self.name,
+                "retrieve_evidence",
+                "sufficient" if assessment.sufficient else "follow_up_required",
+                "evidence_gap",
+                {"cycle": cycle, "goal": evidence_goal, "missing": assessment.missing},
+                tool=True,
+            )
             state.evidence = state.retrieved_evidence = accumulated
             state.evidence_assessment = assessment
             state.uncertainty.retrieval = 1.0 if accumulated else 0.0
@@ -54,20 +62,19 @@ class EvidenceAgent:
             state.uncertainty.retrieval = 0.0
             state.uncertainty.evidence_sufficiency = 0.0
             return state
-    def _plan_queries(self, state: CaseState, goal: str, backend: Any = None) -> List[str]:
+
+    def _plan_queries(self, state: CaseState, goal: str, backend: Any = None, is_targeted: bool = False) -> List[str]:
+        if is_targeted:
+            return [goal]
         queries = ["ABCDE clinical guideline evidence for suspicious pigmented lesions"]
-        if goal and goal not in {"ABCDE", "differential", "measurement", "clinical_guidelines"}:
-            queries.insert(0, goal)
-        elif goal == "differential" or state.uncertainty.classification < 0.70:
+        if goal == "differential" or state.uncertainty.classification < 0.70:
             queries.append("differential diagnosis of uncertain pigmented skin lesion dermoscopy")
         if goal in {"ABCDE", "measurement", "clinical_guidelines"}:
             queries.extend(["melanoma asymmetry irregular border color variation evidence", "melanoma diameter criterion evidence calibrated measurement"])
         if state.abcde.get("E") and state.abcde["E"].availability == "unavailable":
             queries.append("clinical importance of evolution history in ABCDE melanoma assessment")
-        # Preserve the advanced backend's HyDE implementation. Its input uses
-        # only typed observations: a pixel diameter remains a pixel diameter,
-        # and diameter_mm is absent unless CaseState validates calibration.
-        if backend is not None and hasattr(backend, "create_queries"):
+        # Run HyDE only on initial baseline cycle when no targeted query is provided
+        if not is_targeted and backend is not None and hasattr(backend, "create_queries"):
             features = getattr(state.diagnosis_result, "clinical_features", {}) or {}
             metrics = {
                 "asymmetry_index": getattr(features.get("asymmetry"), "score_numeric", 0.0),
@@ -81,8 +88,6 @@ class EvidenceAgent:
             try:
                 queries.extend(backend.create_queries(metrics))
             except Exception:
-                # Standard, goal-specific queries remain a safe fallback when
-                # the optional LLM-powered HyDE component is unavailable.
                 pass
         return list(dict.fromkeys(queries))
     def _evaluate(self, state: CaseState, evidence: List[EvidenceRecord], goal: str, cycle: int) -> EvidenceAssessment:

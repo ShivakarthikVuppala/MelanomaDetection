@@ -40,7 +40,7 @@ class ReportAgent:
         # PDF is an optional rendering tool. Failure to render it must not
         # invalidate the structured report, which remains the source of truth.
         pdf_path = None
-        if state.diagnosis_result is not None and self.config.get("save_pdf", False):
+        if state.diagnosis_result is not None and self.config.get("save_pdf", True):
             try:
                 from .explainability import ExplanationResult
                 from .report_generator import ReportRenderer

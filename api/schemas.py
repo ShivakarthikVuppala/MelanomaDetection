@@ -93,6 +93,7 @@ class PipelineInfoOut(BaseModel):
 class MetadataInfoOut(BaseModel):
     timestamp: datetime
     image_id: Optional[str] = None
+    image_path: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------

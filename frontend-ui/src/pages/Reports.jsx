@@ -104,9 +104,25 @@ export default function Reports({ onNavigate, onAnalysisComplete, mode = 'histor
           link.click();
           document.body.removeChild(link);
           showToast('Report downloaded successfully.', 'success');
-        } else {
-          showToast("We couldn't generate the report right now. Please try again.", 'warning');
+          return;
         }
+      }
+
+      // Fallback: request dedicated on-demand /pdf endpoint
+      const pdfRes = await fetch(`/api/analyses/${item.analysis_id}/pdf`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (pdfRes.ok) {
+        const blob = await pdfRes.blob();
+        const blobUrl = window.URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = blobUrl;
+        link.download = `MelaDetect_Report_${item.analysis_id.substring(0, 8)}.pdf`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        window.URL.revokeObjectURL(blobUrl);
+        showToast('Report downloaded successfully.', 'success');
       } else {
         showToast("We couldn't generate the report right now. Please try again.", 'warning');
       }

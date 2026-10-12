@@ -93,7 +93,7 @@ class PipelineInfo(BaseModel):
 
 class MetadataInfo(BaseModel):
     timestamp: datetime = Field(default_factory=datetime.now)
-    image_path: str
+    image_path: Optional[str] = None
     request_id: Optional[str] = None
 
 

@@ -221,36 +221,43 @@ export default function Upload({ onAnalysisComplete, onNavigate }) {
     }
   };
 
-  const handleDownloadReport = () => {
-    if (!completedAnalysis?.report?.pdf_url) {
-      showToast('Preparing your report...', 'info');
-      // If pdf_url is not ready yet, simulate quick check or show clean message
-      setTimeout(() => {
-        if (completedAnalysis?.report?.pdf_url) {
-          const link = document.createElement('a');
-          link.href = completedAnalysis.report.pdf_url;
-          link.download = `MelaDetect_Report_${completedAnalysis.analysis_id?.substring(0, 8) || 'SkinCheck'}.pdf`;
-          document.body.appendChild(link);
-          link.click();
-          document.body.removeChild(link);
-          showToast('Report downloaded successfully.', 'success');
-        } else {
-          showToast("We couldn't generate the report right now. Please try viewing the report.", 'warning');
-        }
-      }, 1000);
-      return;
-    }
-
+  const handleDownloadReport = async () => {
+    if (!completedAnalysis) return;
     showToast('Preparing your report...', 'info');
-    setTimeout(() => {
-      const link = document.createElement('a');
-      link.href = completedAnalysis.report.pdf_url;
-      link.download = `MelaDetect_Report_${completedAnalysis.analysis_id?.substring(0, 8) || 'SkinCheck'}.pdf`;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      showToast('Report downloaded successfully.', 'success');
-    }, 600);
+
+    try {
+      if (completedAnalysis.report?.pdf_url) {
+        const link = document.createElement('a');
+        link.href = completedAnalysis.report.pdf_url;
+        link.download = `MelaDetect_Report_${completedAnalysis.analysis_id?.substring(0, 8) || 'SkinCheck'}.pdf`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        showToast('Report downloaded successfully.', 'success');
+        return;
+      }
+
+      // If not yet available in state, request dedicated on-demand /pdf endpoint
+      const response = await fetch(`/api/analyses/${completedAnalysis.analysis_id}/pdf`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (response.ok) {
+        const blob = await response.blob();
+        const blobUrl = window.URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = blobUrl;
+        link.download = `MelaDetect_Report_${completedAnalysis.analysis_id?.substring(0, 8) || 'SkinCheck'}.pdf`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        window.URL.revokeObjectURL(blobUrl);
+        showToast('Report downloaded successfully.', 'success');
+        return;
+      }
+      throw new Error('PDF unavailable');
+    } catch {
+      showToast("We couldn't generate the report right now. Please try viewing the report.", 'warning');
+    }
   };
 
   // Helper for risk tiering in completion summary

@@ -8,7 +8,7 @@ import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Optional, Any
 
 import numpy as np
 
@@ -17,7 +17,7 @@ import yaml
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile, Request, Depends
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 from PIL import Image, UnidentifiedImageError
@@ -173,6 +173,99 @@ def _output_url(path: Optional[str], folder: str) -> Optional[str]:
     return f"/static/outputs/{folder}/{Path(path).name}"
 
 
+def _ensure_pdf_report(analysis_data: Any) -> Optional[str]:
+    """Ensure a PDF exists on disk and return its URL path (/static/outputs/reports/...).
+    If report.pdf_url is already valid and the file exists on disk, return it.
+    If not, check if a matching PDF exists in outputs/reports/.
+    If still not, generate the PDF on-demand from the analysis record.
+    """
+    try:
+        if isinstance(analysis_data, dict):
+            analysis_id = analysis_data.get("analysis_id")
+            report_dict = analysis_data.get("report") or {}
+            current_pdf_url = report_dict.get("pdf_url")
+            diag_dict = analysis_data.get("diagnosis")
+            expl_dict = analysis_data.get("explanation")
+            evidence_data = analysis_data.get("evidence") or []
+        else:
+            analysis_id = getattr(analysis_data, "analysis_id", None)
+            report_obj = getattr(analysis_data, "report", None)
+            current_pdf_url = getattr(report_obj, "pdf_url", None) if report_obj else None
+            diag_dict = getattr(analysis_data, "diagnosis", None)
+            expl_dict = getattr(analysis_data, "explanation", None)
+            evidence_data = getattr(analysis_data, "evidence", []) or []
+
+        if not analysis_id:
+            return None
+
+        REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+
+        # 1. If current_pdf_url is set, verify file exists on disk
+        if current_pdf_url:
+            clean_rel = current_pdf_url.replace("/static/", "").replace("/", os.sep)
+            if (PROJECT_ROOT / clean_rel).is_file():
+                return current_pdf_url
+
+        # 2. Check outputs/reports for an existing file matching this analysis_id
+        matches = sorted(list(REPORTS_DIR.glob(f"{analysis_id}*.pdf")), key=os.path.getmtime, reverse=True)
+        if matches and matches[0].is_file():
+            return f"/static/outputs/reports/{matches[0].name}"
+
+        # 3. Generate on-demand if we have diagnosis data
+        if not diag_dict:
+            return None
+
+        from src.engine.diagnosis import DiagnosisResult
+        from src.agents.explainability import ExplanationResult
+        from src.agents.report_generator import ReportRenderer
+
+        if hasattr(diag_dict, "model_dump"):
+            diag_data = diag_dict.model_dump(mode="json")
+        elif isinstance(diag_dict, dict):
+            diag_data = dict(diag_dict)
+        else:
+            diag_data = vars(diag_dict)
+
+        if "metadata" not in diag_data or not isinstance(diag_data["metadata"], dict):
+            diag_data["metadata"] = {}
+        candidate_upload = UPLOADS_DIR / f"{analysis_id}.png"
+        if candidate_upload.is_file():
+            diag_data["metadata"]["image_path"] = str(candidate_upload)
+        elif not diag_data["metadata"].get("image_path"):
+            diag_data["metadata"]["image_path"] = ""
+
+        if "timestamp" not in diag_data["metadata"]:
+            diag_data["metadata"]["timestamp"] = datetime.now()
+
+        diag = DiagnosisResult.model_validate(diag_data)
+
+        if hasattr(expl_dict, "model_dump"):
+            expl_data = expl_dict.model_dump(mode="json")
+        elif isinstance(expl_dict, dict):
+            expl_data = dict(expl_dict)
+        else:
+            expl_data = vars(expl_dict) if expl_dict else {}
+
+        expl = ExplanationResult(
+            summary=expl_data.get("summary") or "Skin lesion diagnostic evaluation.",
+            reasoning=expl_data.get("reasoning") or [],
+            evidence_citations=expl_data.get("evidence_citations") or [],
+            confidence_assessment=expl_data.get("confidence_assessment") or "moderate",
+            next_steps=expl_data.get("next_steps"),
+            limitations=expl_data.get("limitations") or [],
+            grad_cam_reliable=bool(expl_data.get("grad_cam_reliable", False)),
+            flags=expl_data.get("flags") or [],
+        )
+
+        renderer = ReportRenderer({"output_dir": str(REPORTS_DIR)})
+        pdf_path = renderer._generate_pdf(diag, evidence_data, expl, analysis_id)
+        if pdf_path and Path(pdf_path).is_file():
+            return f"/static/outputs/reports/{Path(pdf_path).name}"
+    except Exception as e:
+        logger.warning(f"Could not generate/ensure PDF report for {analysis_id}: {e}")
+    return None
+
+
 def _workflow_to_response(state, original_image_url: Optional[str]) -> AnalysisResponse:
     phase_names = {
         "diagnosis": (1, "Diagnosis"),
@@ -254,6 +347,7 @@ def _workflow_to_response(state, original_image_url: Optional[str]) -> AnalysisR
             metadata=MetadataInfoOut(
                 timestamp=diag.metadata.timestamp,
                 image_id=diag.metadata.request_id or state.analysis_id,
+                image_path=getattr(diag.metadata, "image_path", None) or str(UPLOADS_DIR / f"{state.analysis_id}.png"),
             ),
             processing_status=diag.processing_status,
             warnings=diag.warnings,
@@ -349,6 +443,11 @@ def _workflow_to_response(state, original_image_url: Optional[str]) -> AnalysisR
     report = ReportOut()
     if state.report_result is not None and state.report_result.pdf_path:
         report.pdf_url = _output_url(state.report_result.pdf_path, "reports")
+    else:
+        if REPORTS_DIR.exists():
+            matches = sorted(list(REPORTS_DIR.glob(f"{state.analysis_id}*.pdf")), key=os.path.getmtime, reverse=True)
+            if matches and matches[0].is_file():
+                report.pdf_url = f"/static/outputs/reports/{matches[0].name}"
 
     evolution_assessment = None
     if "evolution" in state.clinical_context and isinstance(state.clinical_context["evolution"], dict):
@@ -573,6 +672,19 @@ async def get_analysis(
                         "error_code": "analysis_not_found",
                         "message": "Analysis not found.",
                     })
+                pdf_url = _ensure_pdf_report(doc)
+                if pdf_url:
+                    if not doc.get("report") or not isinstance(doc["report"], dict):
+                        doc["report"] = {}
+                    if doc["report"].get("pdf_url") != pdf_url:
+                        doc["report"]["pdf_url"] = pdf_url
+                        try:
+                            await db["analyses"].update_one(
+                                {"analysis_id": analysis_id},
+                                {"$set": {"report.pdf_url": pdf_url}}
+                            )
+                        except Exception as update_err:
+                            logger.warning(f"Could not update synced pdf_url in DB: {update_err}")
                 return AnalysisResponse(**doc)
         except HTTPException:
             raise
@@ -593,7 +705,71 @@ async def get_analysis(
             "error_code": "analysis_not_found",
             "message": "Analysis not found.",
         })
+    pdf_url = _ensure_pdf_report(analysis)
+    if pdf_url and hasattr(analysis, "report"):
+        analysis.report.pdf_url = pdf_url
     return analysis
+
+
+@app.get("/api/analyses/{analysis_id}/pdf")
+async def get_analysis_pdf(
+    analysis_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    """Generate or retrieve the PDF report file for an analysis."""
+    user_id = str(current_user.get("id") or current_user.get("_id", ""))
+    db = get_db()
+    doc = None
+    if db is not None:
+        try:
+            doc = await db["analyses"].find_one({"analysis_id": analysis_id})
+        except Exception as e:
+            logger.error(f"MongoDB error in get_analysis_pdf: {e}")
+
+    if not doc:
+        mem_analysis = analyses_store.get(analysis_id)
+        if mem_analysis:
+            doc = mem_analysis.model_dump(mode="json") if hasattr(mem_analysis, "model_dump") else vars(mem_analysis)
+
+    if not doc:
+        raise HTTPException(status_code=404, detail={
+            "error_code": "analysis_not_found",
+            "message": "Analysis not found.",
+        })
+
+    doc_owner = doc.get("user_id", "")
+    if doc_owner and doc_owner != user_id:
+        raise HTTPException(status_code=404, detail={
+            "error_code": "analysis_not_found",
+            "message": "Analysis not found.",
+        })
+
+    pdf_url = _ensure_pdf_report(doc)
+    if not pdf_url:
+        raise HTTPException(status_code=500, detail={
+            "error_code": "report_generation_failed",
+            "message": "We couldn't generate the report right now. Please try again.",
+        })
+
+    if db is not None and (not doc.get("report") or doc.get("report", {}).get("pdf_url") != pdf_url):
+        try:
+            await db["analyses"].update_one(
+                {"analysis_id": analysis_id},
+                {"$set": {"report.pdf_url": pdf_url}}
+            )
+        except Exception:
+            pass
+
+    clean_rel = pdf_url.replace("/static/", "").replace("/", os.sep)
+    file_path = PROJECT_ROOT / clean_rel
+    if not file_path.is_file():
+        raise HTTPException(status_code=404, detail="PDF report file not found on server.")
+
+    return FileResponse(
+        path=str(file_path),
+        filename=f"MelaDetect_Report_{analysis_id[:8]}.pdf",
+        media_type="application/pdf",
+    )
 
 
 @app.post("/api/preprocess", response_model=PreprocessResponse)

@@ -122,19 +122,50 @@ export default function Results({ analysisResult, onNavigate }) {
   const measurements = diagnosis?.measurements?.lesion || {};
   const hasPhysicalScale = Boolean(measurements.physical_scale_available);
 
-  const handleDownloadPDF = () => {
+  const handleDownloadPDF = async () => {
     if (downloading) return;
     setDownloading(true);
     showToast('Preparing your report...', 'info');
-    setTimeout(() => {
+
+    try {
+      // If we already have a direct pdf_url, trigger standard download
       if (report?.pdf_url) {
         const link = document.createElement('a');
         link.href = report.pdf_url;
         link.download = `MelaDetect_Report_${analysis_id?.substring(0, 8) || 'SkinCheck'}.pdf`;
-        document.body.appendChild(link); link.click(); document.body.removeChild(link);
-        setDownloading(false); showToast('Report downloaded successfully.', 'success');
-      } else { setDownloading(false); showToast("We couldn't generate the report right now. Please try again.", 'warning'); }
-    }, 800);
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        setDownloading(false);
+        showToast('Report downloaded successfully.', 'success');
+        return;
+      }
+
+      // If pdf_url is not pre-populated, request the on-demand PDF endpoint
+      if (analysis_id) {
+        const response = await fetch(`/api/analyses/${analysis_id}/pdf`, {
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+        });
+        if (response.ok) {
+          const blob = await response.blob();
+          const blobUrl = window.URL.createObjectURL(blob);
+          const link = document.createElement('a');
+          link.href = blobUrl;
+          link.download = `MelaDetect_Report_${analysis_id.substring(0, 8)}.pdf`;
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+          window.URL.revokeObjectURL(blobUrl);
+          setDownloading(false);
+          showToast('Report downloaded successfully.', 'success');
+          return;
+        }
+      }
+      throw new Error('PDF unavailable');
+    } catch {
+      setDownloading(false);
+      showToast("We couldn't generate the report right now. Please try again.", 'warning');
+    }
   };
   const handlePrint = () => { window.print(); };
 

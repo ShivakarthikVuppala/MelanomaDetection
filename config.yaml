@@ -4,8 +4,8 @@
 # =============================================================================
 
 project:
-  name: melanoma_phase1
-  version: "1.0.0"
+  name: melanoma_phase_final
+  version: "2.0.0"
   seed: 42
   device: auto  # auto | cuda | cpu
 
@@ -112,7 +112,7 @@ paths:
 # Evidence Agent — canonical advanced hybrid retrieval backend
 # ---------------------------------------------------------------------------
 evidence:
-  max_retrieval_cycles: 3
+  max_retrieval_cycles: 1
   backend: rag_pipeline.agent.AdvancedRetrievalBackend
 
 # ---------------------------------------------------------------------------
@@ -134,7 +134,7 @@ explainability:
 # ---------------------------------------------------------------------------
 report:
   output_dir: outputs/reports/
-  save_pdf: false
+  save_pdf: true
   include_gradcam: true
   include_evidence: true
 
