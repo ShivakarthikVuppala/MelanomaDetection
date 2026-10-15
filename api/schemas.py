@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field
 
 class DiagnosisInfoOut(BaseModel):
     prediction: str
-    confidence: float
+    confidence: Optional[float] = None
     fusion_score: Optional[float] = None
     fusion_weights: Optional[Dict[str, float]] = None
 
@@ -113,19 +113,19 @@ class PhaseStatus(BaseModel):
 class DiagnosisResultOut(BaseModel):
     """Phase 1 output: full diagnosis result."""
     diagnosis: DiagnosisInfoOut
-    probabilities: Dict[str, float]
+    probabilities: Dict[str, float] = Field(default_factory=dict)
     melanoma_probability: Optional[float] = None
     non_melanoma_probability: Optional[float] = None
     classification_threshold: Optional[float] = None
-    measurements: Dict[str, Dict[str, Any]]
-    clinical_features: Dict[str, FeatureScoreOut]
+    measurements: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
+    clinical_features: Dict[str, FeatureScoreOut] = Field(default_factory=dict)
     clinical_interpretations: Dict[str, str] = Field(default_factory=dict)
-    segmentation: SegmentationInfoOut
-    explainability: ExplainabilityInfoOut
-    preprocessing: PreprocessingInfoOut
+    segmentation: Optional[SegmentationInfoOut] = None
+    explainability: Optional[ExplainabilityInfoOut] = None
+    preprocessing: Optional[PreprocessingInfoOut] = None
     scale_calibration: Optional[ScaleCalibrationOut] = None
-    pipeline: PipelineInfoOut
-    metadata: MetadataInfoOut
+    pipeline: Optional[PipelineInfoOut] = None
+    metadata: Optional[MetadataInfoOut] = None
     processing_status: str = "completed"
     warnings: List[str] = Field(default_factory=list)
 
@@ -198,7 +198,7 @@ class AnalysisResponse(BaseModel):
     """Complete pipeline response combining all phases."""
     analysis_id: str
     status: str  # running | completed | failed | image_quality_insufficient | segmentation_failed
-    phases: List[PhaseStatus]
+    phases: List[PhaseStatus] = Field(default_factory=list)
     diagnosis: Optional[DiagnosisResultOut] = None
     evidence: Optional[List[MedicalEvidenceOut]] = None
     explanation: Optional[ExplanationOut] = None

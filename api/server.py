@@ -220,6 +220,10 @@ def _ensure_pdf_report(analysis_data: Any) -> Optional[str]:
         if matches and matches[0].is_file():
             return f"/static/outputs/reports/{matches[0].name}"
 
+        status = analysis_data.get("status") if isinstance(analysis_data, dict) else getattr(analysis_data, "status", None)
+        if status in ("running", "pending", "failed", "error", "image_quality_insufficient", "segmentation_failed"):
+            return None
+
         # 3. Generate on-demand if we have diagnosis data
         if not diag_dict:
             return None
@@ -245,6 +249,10 @@ def _ensure_pdf_report(analysis_data: Any) -> Optional[str]:
 
         if "timestamp" not in diag_data["metadata"]:
             diag_data["metadata"]["timestamp"] = datetime.now()
+
+        diag_core = diag_data.get("diagnosis") or {}
+        if not isinstance(diag_core, dict) or diag_core.get("confidence") is None or "probabilities" not in diag_data:
+            return None
 
         diag = DiagnosisResult.model_validate(diag_data)
 
@@ -679,12 +687,33 @@ async def get_analysis(
             doc = await db["analyses"].find_one({"analysis_id": analysis_id})
             if doc:
                 # Enforce ownership: if the document has a user_id it MUST match.
-                doc_owner = doc.get("user_id", "")
+                doc_owner = str(doc.get("user_id", ""))
                 if doc_owner and doc_owner != user_id:
                     raise HTTPException(status_code=404, detail={
                         "error_code": "analysis_not_found",
                         "message": "Analysis not found.",
                     })
+
+                # If still running, return a clean running response without generating report
+                if doc.get("status") in ("running", "pending"):
+                    mem = analyses_store.get(analysis_id)
+                    if mem and getattr(mem, "status", None) == "running":
+                        return mem
+                    return AnalysisResponse(
+                        analysis_id=analysis_id,
+                        status=doc.get("status") or "running",
+                        phases=[PhaseStatus(**p) for p in (doc.get("phases") or [])] if doc.get("phases") else [
+                            PhaseStatus(phase=1, name="Diagnosis", status="running"),
+                            PhaseStatus(phase=2, name="Medical Evidence", status="pending"),
+                            PhaseStatus(phase=3, name="Explanation", status="pending"),
+                            PhaseStatus(phase=4, name="Report Generation", status="pending"),
+                        ],
+                        original_image_url=doc.get("original_image_url"),
+                        patient_id=doc.get("patient_id"),
+                        patient_name=doc.get("patient_name"),
+                        flags=doc.get("flags") or [],
+                    )
+
                 pdf_url = _ensure_pdf_report(doc)
                 if pdf_url:
                     if not doc.get("report") or not isinstance(doc["report"], dict):
@@ -755,6 +784,12 @@ async def get_analysis_pdf(
         raise HTTPException(status_code=404, detail={
             "error_code": "analysis_not_found",
             "message": "Analysis not found.",
+        })
+
+    if doc.get("status") in ("running", "pending"):
+        raise HTTPException(status_code=409, detail={
+            "error_code": "analysis_still_running",
+            "message": "The analysis is still running. Please wait for it to complete.",
         })
 
     pdf_url = _ensure_pdf_report(doc)
@@ -1059,6 +1094,23 @@ async def analyze_image(
 
     original_image_url = f"/static/uploads/{file_path.name}"
 
+    initial_phases = [
+        PhaseStatus(phase=1, name="Diagnosis", status="running"),
+        PhaseStatus(phase=2, name="Medical Evidence", status="pending"),
+        PhaseStatus(phase=3, name="Explanation", status="pending"),
+        PhaseStatus(phase=4, name="Report Generation", status="pending"),
+    ]
+    running_analysis = AnalysisResponse(
+        analysis_id=analysis_id,
+        status="running",
+        phases=initial_phases,
+        original_image_url=original_image_url,
+        patient_id=patient_id.strip() if patient_id else None,
+        patient_name=(patient_name or "").strip() if patient_name else None,
+    )
+    setattr(running_analysis, "user_id", _caller_user_id)
+    analyses_store[analysis_id] = running_analysis
+
     # Record initial running status in MongoDB so patient records can show it in progress
     if _is_privileged and patient_id and patient_id.strip():
         db = get_db()
@@ -1074,6 +1126,7 @@ async def analyze_image(
                         "status": "running",
                         "original_image_url": original_image_url,
                         "created_at": datetime.now(timezone.utc).isoformat(),
+                        "phases": [p.model_dump(mode="json") for p in initial_phases],
                         "diagnosis": {
                             "diagnosis": {"prediction": "Still Running...", "confidence": None},
                             "metadata": {

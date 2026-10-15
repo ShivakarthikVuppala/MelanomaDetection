@@ -191,8 +191,11 @@ def main():
         # Do not let the reloader watch model/cache files. A reload during a
         # Hugging Face download would restart the process and download BGE
         # again. Opt in explicitly for source-only development.
-        reload_enabled = os.getenv("UVICORN_RELOAD", "0").lower() in {"1", "true", "yes"}
-        uvicorn.run("api.server:app", host=host, port=port, reload=reload_enabled)
+        reload_enabled = os.getenv("UVICORN_RELOAD", "1").lower() in {"1", "true", "yes"}
+        if reload_enabled:
+            uvicorn.run("api.server:app", host=host, port=port, reload=True, reload_dirs=["api"])
+        else:
+            uvicorn.run("api.server:app", host=host, port=port, reload=False)
 
     # ── Agentic RAG v4 Commands ──────────────────────────────
 
