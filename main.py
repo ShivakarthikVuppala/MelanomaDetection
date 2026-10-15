@@ -11,7 +11,7 @@ Usage:
     python main.py evaluate-cls       # Evaluate classifier on test set
     python main.py evaluate-seg       # Evaluate segmentation
     python main.py diagnose <image>   # Run deterministic vision tools only
-    python main.py orchestrate <image># Run the canonical five-agent workflow
+    python main.py orchestrate <image># Run the canonical four-agent workflow
     python main.py gradcam <image>    # Generate Grad-CAM visualization
     python main.py serve              # Start FastAPI server
     python main.py build-rag          # Build Qdrant + BM25 hybrid index
@@ -96,7 +96,7 @@ def main():
 
         image_path = sys.argv[2]
         print(f"\n{'='*60}")
-        print(f"  Three-Agent Melanoma Case Workflow")
+        print(f"  Four-Agent Melanoma Case Workflow")
         print(f"  Image: {image_path}")
         print(f"{'='*60}\n")
 

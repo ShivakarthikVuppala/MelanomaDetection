@@ -1,4 +1,9 @@
-"""Evidence Agent: coordinates hybrid RAG retrieval and clinical context/evolution evidence."""
+"""Evidence Agent: hybrid RAG retrieval over medical literature with bounded
+evidence-gap follow-up cycles.
+
+Patient history and evolution are handled by the first-class ClinicalContextAgent;
+the clinical methods below are retained only as backward-compatibility shims.
+"""
 from __future__ import annotations
 from typing import Any, Dict, Iterable, List, Optional
 from .state import CaseState, EvidenceAssessment, EvidenceRecord
@@ -8,11 +13,14 @@ class EvidenceAgent:
     def __init__(self, max_cycles: int = 3, backend: Any = None, clinical_context: Any = None):
         self.max_cycles = max_cycles
         self._backend = backend
-        from .clinical_context import ClinicalContextHandler
-        self.clinical_context = clinical_context or ClinicalContextHandler()
+        # Backward-compatibility only: the Clinical Context Agent is now a first-class
+        # top-level agent orchestrated directly. This retained instance and the shims
+        # below keep older callers (and injected test doubles) working.
+        from .clinical_context import ClinicalContextAgent
+        self.clinical_context = clinical_context or ClinicalContextAgent()
 
     def update_clinical_context(self, state: CaseState, supplied: Dict[str, Any] | None = None) -> CaseState:
-        """Collect and normalize patient clinical context as evidence (e.g. reported evolution, duration, symptoms)."""
+        """Deprecated shim — delegates to the first-class Clinical Context Agent."""
         return self.clinical_context.update(state, supplied)
 
     def assess_evolution(
@@ -21,7 +29,7 @@ class EvidenceAgent:
         timestamps: List[str] | None = None,
         config: Dict[str, Any] | None = None,
     ) -> Dict[str, Any]:
-        """Assess temporal lesion change across visits as clinical evolution evidence."""
+        """Deprecated shim — delegates to the first-class Clinical Context Agent."""
         return self.clinical_context.assess_evolution(image_paths, timestamps, config)
 
     def _backend_instance(self):

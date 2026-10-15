@@ -1,10 +1,17 @@
-"""Clinical Context Handler: internal component of Evidence Agent for patient history and evolution."""
+"""Clinical Context Agent: first-class agent owning patient history and the ABCDE
+Evolution (E) criterion.
+
+This top-level agent normalizes patient-reported clinical context, assesses temporal
+lesion evolution across historical image visits, and emits missing-information
+questions. It never infers patient history from a single image. It is orchestrated
+directly by the OrchestratorAgent alongside the Vision, Evidence, and Report agents.
+"""
 from __future__ import annotations
 from typing import Any, Dict, List
 from .state import ABCDEFeature, CaseState
 
-class ClinicalContextHandler:
-    name = "evidence"
+class ClinicalContextAgent:
+    name = "clinical_context"
     QUESTION_MAP = {"evolution": "Has the lesion changed in size, shape, color, elevation, or symptoms? If so, over what time period?"}
 
     def update(self, state: CaseState, supplied: Dict[str, Any] | None = None) -> CaseState:
@@ -22,7 +29,7 @@ class ClinicalContextHandler:
             state.abcde["E"] = ABCDEFeature("E", "available", {"reported_history": evolution}, "Patient-reported evolution recorded; it is not inferred from the image.")
             state.pending_clinical_questions = []
             state.uncertainty.clinical_context = 0.8
-        state.record(self.name, "request_clinical_context", "updated", "missing_information", {"pending_fields": [q["field"] for q in state.pending_clinical_questions]})
+        state.record(self.name, "request_clinical_context", "updated", "missing_information", {"pending_fields": [q["field"] for q in state.pending_clinical_questions]}, tool=True)
         return state
 
     def missing_information(self, state: CaseState) -> List[Dict[str, str]]:
@@ -135,7 +142,7 @@ class ClinicalContextHandler:
                 parts.append(img.copy())
                 
         response = client.models.generate_content(model=model_name, contents=parts)
-        text = re.sub(r"```(?:json)?", "", response.text).strip()
+        text = re.sub(r"```(?:json)?", "", response.text).strip()
         
         try:
             data = json.loads(text)
@@ -267,6 +274,7 @@ class ClinicalContextHandler:
         if days < 365: return f"~{days // 30} month(s)"
         return f"~{days // 365} year(s)"
 
-# Backward-compatibility alias: ClinicalContextAgent is an internal component of EvidenceAgent
-ClinicalContextAgent = ClinicalContextHandler
-__all__ = ["ClinicalContextHandler", "ClinicalContextAgent"]
+# Backward-compatibility alias: earlier revisions folded this agent into the Evidence
+# Agent as "ClinicalContextHandler". Kept so existing imports keep working.
+ClinicalContextHandler = ClinicalContextAgent
+__all__ = ["ClinicalContextAgent", "ClinicalContextHandler"]

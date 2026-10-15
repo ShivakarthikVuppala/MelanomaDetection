@@ -55,17 +55,17 @@ class OrchestratorAgent:
         # always receives mode/llm_provider/model for EvidenceGroundedExplanationService
         report_cfg = {**self.config.get("report", {}), **self._explainability_cfg}
         self.vision = vision or VisionAgent(config_path)
+        # Clinical Context is a first-class top-level agent (patient history + Evolution).
+        self.clinical = clinical or ClinicalContextAgent()
         self.evidence = evidence or EvidenceAgent(int(self.config.get("evidence", {}).get("max_retrieval_cycles", 3)))
         self.report = report or ReportAgent(report_cfg)
-
-        # Clinical context is part of the Evidence Agent
-        self.clinical = clinical or getattr(self.evidence, "clinical_context", None) or ClinicalContextAgent()
 
         # Cognitive Agent Mind (LLM Reasoning)
         self._gemini_client = None
         self._llm_model = orchestrator.get("model", self._explainability_cfg.get("model", "gemini-2.5-flash"))
         self._llm_enabled = orchestrator.get("cognitive_reasoning", True)
         self._latest_thought: Optional[str] = None
+        self._latest_mind_decision: Optional[Dict[str, Any]] = None
 
     def _get_llm_client(self):
         """Lazily initialize Google GenAI Client for cognitive deliberation."""
@@ -155,6 +155,7 @@ Respond in valid JSON only:
 }}
 """
         try:
+            print("\n[Orchestrator Mind] Invoking Gemini Cognitive Mind for case deliberation...", flush=True)
             resp = client.models.generate_content(
                 model=self._llm_model,
                 contents=prompt,
@@ -163,10 +164,337 @@ Respond in valid JSON only:
             raw = (resp.text or "").strip()
             data = json.loads(raw)
             if isinstance(data, dict) and data.get("action") in {"retrieve_evidence", "generate_explanation"}:
+                self._latest_mind_decision = data
                 return data
         except Exception as exc:
             logger.debug(f"LLM deliberation error: {exc}")
+            print(f"[Orchestrator Mind] Gemini deliberation error or fallback: {exc}", flush=True)
         return None
+
+    @staticmethod
+    def _round_safe(val: Any, n: int = 3) -> Optional[float]:
+        try:
+            return round(float(val), n) if val is not None else None
+        except (ValueError, TypeError):
+            return None
+
+    def _format_case_state_json(self, state: CaseState, step_num: int) -> Dict[str, Any]:
+        """Generate a structured, serializable JSON snapshot of the CaseState from the Orchestrator's perspective."""
+        # 1. Quality evaluation
+        iq = state.image_quality if isinstance(state.image_quality, dict) else {}
+        quality_summary = {
+            "evaluated": bool(state.image_quality),
+            "accepted": iq.get("accepted"),
+            "resolution": (
+                f"{iq.get('width', 0)}x{iq.get('height', 0)}"
+                if (iq.get("width") and iq.get("height"))
+                else None
+            ),
+            "laplacian_variance": self._round_safe(iq.get("laplacian_variance"), 2),
+            "rejection_reason": iq.get("reason"),
+        }
+
+        # 2. Vision and deep learning diagnosis
+        diag = state.diagnosis_result
+        if diag:
+            diag_obj = getattr(diag, "diagnosis", None)
+            prediction = getattr(diag_obj, "prediction", "unknown") if diag_obj else "unknown"
+            confidence = getattr(diag_obj, "confidence", 0.0) if diag_obj else 0.0
+            probs = getattr(diag, "probabilities", {}) or {}
+            mel_prob = probs.get("melanoma")
+            vision_summary = {
+                "evaluated": True,
+                "prediction": prediction,
+                "confidence_pct": self._round_safe(confidence, 1),
+                "melanoma_probability": self._round_safe(mel_prob, 4),
+                "probabilities": {k: self._round_safe(v, 4) for k, v in probs.items()},
+                "threshold": self._round_safe(getattr(diag, "classification_threshold", None), 4),
+            }
+        else:
+            vision_summary = {
+                "evaluated": False,
+                "prediction": None,
+                "confidence_pct": None,
+                "melanoma_probability": None,
+                "probabilities": {},
+                "threshold": None,
+            }
+
+        # 3. Clinical ABCD feature extraction
+        features = getattr(diag, "clinical_features", {}) or {} if diag else {}
+        abcd_summary: Dict[str, Any] = {}
+        for feat_name in ("asymmetry", "border", "color", "diameter", "evolution"):
+            feat = features.get(feat_name)
+            if feat is not None:
+                abcd_summary[feat_name] = {
+                    "score_label": getattr(feat, "score_label", "unknown"),
+                    "score_numeric": self._round_safe(getattr(feat, "score_numeric", 0.0), 3),
+                    "interpretation": getattr(feat, "interpretation", None),
+                }
+            else:
+                abcd_summary[feat_name] = None
+
+        # 4. Grad-CAM visual attention
+        gcam = state.gradcam if isinstance(state.gradcam, dict) else {}
+        gradcam_summary = {
+            "evaluated": bool(state.gradcam),
+            "attention_inside_lesion": self._round_safe(gcam.get("attention_inside_lesion"), 4),
+            "alignment_reliable": gcam.get("alignment_reliable"),
+            "retry_count": gcam.get("retry_count", 0),
+            "saved_path": state.grad_cam_saved_path,
+        }
+
+        # 5. Multimodal ABCDE fusion
+        fusion = state.fusion_result
+        if fusion:
+            fusion_summary = {
+                "evaluated": True,
+                "composite_score": self._round_safe(getattr(fusion, "composite_score", 0.0), 4),
+                "prediction": getattr(fusion, "prediction", "unknown"),
+                "weights_used": (
+                    {k: self._round_safe(v, 3) for k, v in fusion.weights_used.items()}
+                    if getattr(fusion, "weights_used", None)
+                    else {}
+                ),
+                "component_scores": (
+                    {k: self._round_safe(v, 4) for k, v in fusion.component_scores.items()}
+                    if getattr(fusion, "component_scores", None)
+                    else {}
+                ),
+            }
+        else:
+            fusion_summary = {
+                "evaluated": False,
+                "composite_score": None,
+                "prediction": None,
+                "weights_used": {},
+                "component_scores": {},
+            }
+
+        # 6. Longitudinal evolution
+        ev_ctx = state.clinical_context.get("evolution") if isinstance(state.clinical_context, dict) else None
+        evolution_summary = {
+            "historical_images_count": len(state.historical_images or []),
+            "evaluated": ev_ctx is not None,
+            "status": ev_ctx.get("status") if isinstance(ev_ctx, dict) else None,
+            "confidence": self._round_safe(ev_ctx.get("confidence") if isinstance(ev_ctx, dict) else None, 3),
+            "comparison": ev_ctx.get("comparison") if isinstance(ev_ctx, dict) else None,
+        }
+
+        # 7. Literature evidence & sufficiency
+        ev_titles = [
+            {"id": getattr(e, "id", str(idx)), "title": getattr(e, "title", "Article"), "relevance_score": self._round_safe(getattr(e, "relevance_score", 0.0), 3)}
+            for idx, e in enumerate(state.evidence[:5])
+        ]
+        ev_assessment = getattr(state, "evidence_assessment", None)
+        evidence_summary = {
+            "cycles_completed": getattr(ev_assessment, "cycles_completed", 0) if ev_assessment else 0,
+            "max_cycles": getattr(self.evidence, "max_cycles", 1),
+            "is_sufficient": getattr(ev_assessment, "sufficient", False) if ev_assessment else False,
+            "total_retrieved": len(state.evidence or []),
+            "retrieved_articles": ev_titles,
+        }
+
+        # 8. Uncertainty signals
+        unc = getattr(state, "uncertainty", None)
+        uncertainty_summary = {
+            "classification": self._round_safe(getattr(unc, "classification", 1.0), 3) if unc else 1.0,
+            "segmentation": self._round_safe(getattr(unc, "segmentation", 1.0), 3) if unc else 1.0,
+            "evidence_sufficiency": self._round_safe(getattr(unc, "evidence_sufficiency", 1.0), 3) if unc else 1.0,
+        }
+
+        # 9. Pipeline synthesis outputs
+        outputs_summary = {
+            "explanation_ready": bool(state.explanation),
+            "final_report_ready": bool(state.final_report),
+            "pdf_generated": bool(isinstance(state.final_report, dict) and state.final_report.get("pdf_url")),
+        }
+
+        # 10. Recent trace
+        trace_events = [
+            {
+                "step": getattr(t, "step", i + 1),
+                "agent": getattr(t, "agent", "unknown"),
+                "action": getattr(t, "action", "unknown"),
+                "result": getattr(t, "result", "unknown"),
+                "reason_category": getattr(t, "reason_category", "unknown"),
+            }
+            for i, t in enumerate(state.agent_decisions + state.tool_executions)
+        ]
+
+        return {
+            "analysis_id": state.analysis_id,
+            "step_number": step_num,
+            "workflow_status": state.status,
+            "image_quality": quality_summary,
+            "vision_diagnosis": vision_summary,
+            "clinical_features_abcd": abcd_summary,
+            "gradcam_attention": gradcam_summary,
+            "multimodal_abcde_fusion": fusion_summary,
+            "longitudinal_evolution": evolution_summary,
+            "literature_evidence": evidence_summary,
+            "uncertainty_signals": uncertainty_summary,
+            "pipeline_outputs": outputs_summary,
+            "flags": list(state.flags or []),
+            "recent_trace": trace_events[-4:] if trace_events else [],
+        }
+
+    def _format_thought_action_json(
+        self,
+        state: CaseState,
+        action: str,
+        reason: str,
+        step_num: int,
+        mind_decision: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Generate structured JSON describing the clinical thought, selected action, and sequence for this step."""
+        default_thoughts = {
+            "validate_image": (
+                "image_safety",
+                "Image quality has not yet been validated. Clinical safety protocol mandates validating input image "
+                "resolution, illumination, and blur variance before any downstream diagnostic processing.",
+                "vision",
+            ),
+            "finish_case": (
+                "case_termination",
+                (
+                    f"Input image rejected by quality control gate ({state.image_quality.get('reason')}). Safe analysis "
+                    "cannot proceed with compromised image data."
+                    if isinstance(state.image_quality, dict) and not state.image_quality.get("accepted")
+                    else "All diagnostic and reporting phases completed successfully. Finalizing CaseState audit log."
+                ),
+                "orchestrator",
+            ),
+            "classify_image": (
+                "deep_learning_vision",
+                "Image quality verified. Swin Transformer V2 classification, SegFormer lesion segmentation, and ABCD "
+                "morphological feature extraction required to establish baseline diagnostic evidence.",
+                "vision",
+            ),
+            "refine_and_reclassify": (
+                "spatial_faithfulness",
+                "Grad-CAM visual attention map shows low alignment with lesion boundary (AIL below threshold). "
+                "Re-extracting feature map and refining classification for spatial faithfulness.",
+                "vision",
+            ),
+            "assess_evolution": (
+                "longitudinal_analysis",
+                f"Patient has {len(state.historical_images or [])} historical image visit(s). Clinical protocol requires "
+                "longitudinal lesion evolution comparison to assess change in morphology over time (E criterion).",
+                "clinical_context",
+            ),
+            "request_clinical_context": (
+                "clinical_intake",
+                "Evolution (E criterion) is unassessed. Querying patient clinical context and history to evaluate "
+                "lesion changes over time.",
+                "clinical_context",
+            ),
+            "apply_abcde_fusion": (
+                "multimodal_fusion",
+                "Vision predictions and ABCD morphological features are ready. Synthesizing multimodal ABCDE composite "
+                "score and clinical risk prediction using weighted multi-criteria fusion.",
+                "orchestrator",
+            ),
+            "retrieve_evidence": (
+                "literature_retrieval",
+                "Literature retrieval required to validate diagnostic criteria and differential diagnoses against "
+                "medical knowledge base.",
+                "evidence",
+            ),
+            "generate_explanation": (
+                "clinical_synthesis",
+                "Multimodal findings and medical literature are verified and sufficient. Synthesizing evidence-grounded "
+                "clinical explanation and diagnostic rationale.",
+                "report",
+            ),
+            "generate_report": (
+                "report_generation",
+                "Clinical explanation and diagnostic findings are synthesized. Generating comprehensive diagnostic report "
+                "and patient documentation.",
+                "report",
+            ),
+        }
+
+        all_ordered_actions = [
+            "validate_image",
+            "classify_image",
+            "assess_evolution" if state.historical_images else None,
+            "apply_abcde_fusion",
+            "retrieve_evidence",
+            "generate_explanation",
+            "generate_report",
+            "finish_case",
+        ]
+        all_ordered_actions = [a for a in all_ordered_actions if a is not None]
+
+        if mind_decision and mind_decision.get("thought"):
+            phase = "cognitive_mind_deliberation"
+            thought = mind_decision["thought"]
+            engine = "gemini_cognitive_mind"
+            target_agent = "evidence" if action == "retrieve_evidence" else "report"
+            evidence_query = mind_decision.get("evidence_query")
+        else:
+            meta = default_thoughts.get(
+                action,
+                ("general_orchestration", f"Proceeding with {action} based on {reason}.", "orchestrator"),
+            )
+            phase = meta[0]
+            thought = meta[1]
+            target_agent = meta[2]
+            engine = "safety_prerequisite_ordering"
+            evidence_query = None
+
+        completed_actions = [getattr(t, "action", "") for t in state.agent_decisions]
+        upcoming_actions = [a for a in all_ordered_actions if a not in completed_actions and a != action]
+
+        result: Dict[str, Any] = {
+            "step": step_num,
+            "engine": engine,
+            "model": self._llm_model if engine == "gemini_cognitive_mind" else "deterministic_policy",
+            "phase": phase,
+            "thought": thought,
+            "action": action,
+            "reason": reason,
+            "target_agent": target_agent,
+        }
+        if evidence_query:
+            result["evidence_query"] = evidence_query
+        result["workflow_sequence"] = {
+            "completed": completed_actions,
+            "current": action,
+            "upcoming": upcoming_actions,
+        }
+        return result
+
+    def _print_terminal_step_banner(
+        self,
+        step_num: int,
+        action: str,
+        reason: str,
+        state_understanding: Dict[str, Any],
+        thought_action_sequence: Dict[str, Any],
+        gemini_raw_json: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Print prominent, formatted JSON blocks to the backend terminal for workflow observability."""
+        delim = "=" * 80
+        subdelim = "-" * 80
+
+        print(f"\n{delim}", flush=True)
+        print(f" [ORCHESTRATOR STEP {step_num} / {self.max_steps}]  ACTION: {action}  |  REASON: {reason}", flush=True)
+        print(f"{delim}", flush=True)
+
+        print("\n>>> 1. CASE STATE UNDERSTANDING (ORCHESTRATOR PERSPECTIVE JSON):", flush=True)
+        print(json.dumps(state_understanding, indent=2, default=str), flush=True)
+
+        if gemini_raw_json:
+            print(f"\n{subdelim}", flush=True)
+            print(">>> 2. GEMINI COGNITIVE MIND DELIBERATION (RAW RETURNED JSON):", flush=True)
+            print(json.dumps(gemini_raw_json, indent=2, default=str), flush=True)
+
+        print(f"\n{subdelim}", flush=True)
+        print(">>> 3. THOUGHT & ACTION SEQUENCE (JSON):", flush=True)
+        print(json.dumps(thought_action_sequence, indent=2, default=str), flush=True)
+        print(f"{delim}\n", flush=True)
 
     def run(
         self,
@@ -187,22 +515,41 @@ Respond in valid JSON only:
             historical_images=historical_images or [],
         )
 
-        for _ in range(self.max_steps):
+        for step_idx in range(self.max_steps):
             self._latest_thought = None
+            self._latest_mind_decision = None
             action, reason = self.choose_next_action(state)
 
-            detail: Dict[str, Any] = {}
-            if self._latest_thought:
-                detail["thought"] = self._latest_thought
+            state_understanding = self._format_case_state_json(state, step_idx + 1)
+            thought_action = self._format_thought_action_json(
+                state, action, reason, step_idx + 1, mind_decision=self._latest_mind_decision
+            )
+
+            # Print formatted Case State Understanding and Thought & Action Sequence JSON directly to terminal
+            self._print_terminal_step_banner(
+                step_num=step_idx + 1,
+                action=action,
+                reason=reason,
+                state_understanding=state_understanding,
+                thought_action_sequence=thought_action,
+                gemini_raw_json=self._latest_mind_decision,
+            )
+
+            detail: Dict[str, Any] = {
+                "thought": thought_action.get("thought"),
+                "engine": thought_action.get("engine"),
+                "phase": thought_action.get("phase"),
+            }
+            if self._latest_mind_decision:
+                detail["gemini_deliberation"] = self._latest_mind_decision
                 detail["cognitive_mode"] = "gemini_guided_deliberation"
-                print(f"\n[Orchestrator Mind] Thought: {self._latest_thought}")
-                print(f"[Orchestrator Mind] Action: {action} ({reason})\n")
 
             state.record(self.name, action, "selected", reason, detail=detail)
 
             if action == "finish_case":
                 state.status = "completed" if not state.error_code else "failed"
                 state.record(self.name, action, "completed", "termination")
+                print(f"[Orchestrator] Case analysis completed with status: '{state.status}'.\n", flush=True)
                 return state
 
             try:
@@ -225,11 +572,23 @@ Respond in valid JSON only:
                 elif action == "refine_and_reclassify":
                     self.vision.refine_and_reclassify(state)
                 elif action == "assess_evolution":
-                    ev_result = self.evidence.assess_evolution(
+                    ev_result = self.clinical.assess_evolution(
                         state.historical_images + [state.image_path],
                         config=self._explainability_cfg,
                     )
                     state.clinical_context["evolution"] = ev_result
+                    state.record(
+                        self.clinical.name,
+                        "assess_evolution",
+                        ev_result.get("status", "unavailable"),
+                        "historical_comparison",
+                        {
+                            "status": ev_result.get("status"),
+                            "confidence": ev_result.get("confidence"),
+                            "images_compared": ev_result.get("comparison", {}).get("images_compared"),
+                        },
+                        tool=True,
+                    )
                     if state.diagnosis_result and "evolution" in state.diagnosis_result.clinical_features:
                         ev_status = ev_result.get("status", "unavailable")
                         ev_confidence = float(ev_result.get("confidence", 0.0))
@@ -239,7 +598,7 @@ Respond in valid JSON only:
                         state.diagnosis_result.clinical_features["evolution"].score_numeric = ev_confidence
                         state.diagnosis_result.clinical_features["evolution"].details = ev_result
                 elif action == "request_clinical_context":
-                    self.evidence.update_clinical_context(state, clinical_context)
+                    self.clinical.update(state, clinical_context)
                     if (
                         state.diagnosis_result
                         and "evolution" in state.clinical_context
@@ -361,6 +720,7 @@ Respond in valid JSON only:
                     reason = mind_decision.get("reason") or "cognitive_deliberation"
                     query = mind_decision.get("evidence_query")
                     self._latest_thought = thought
+                    self._latest_mind_decision = mind_decision
 
                     if action == "retrieve_evidence":
                         return "retrieve_evidence", query or reason

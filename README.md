@@ -10,22 +10,23 @@ An agentic, retrieval-augmented framework for explainable melanoma analysis from
 
 ![Architecture](assets/architecture.png)
 
-A state-based **Orchestrator** drives three specialist agents through a shared `CaseState`.
+A state-based **Orchestrator** drives four specialist agents through a shared `CaseState`.
 
 | Component | Role |
 |---|---|
 | `OrchestratorAgent` | Observes `CaseState`, chooses the next action, executes it, records a concise execution event, and reassesses until complete |
 | `VisionAgent` | Image validation, preprocessing, SwinV2 classification, SegFormer segmentation, OpenCV/scikit-image measurements, calibration, Grad-CAM, and the authoritative image-derived ABCD observations. Classification and segmentation run as **parallel** branches |
+| `ClinicalContextAgent` | Owns patient history and the ABCDE Evolution (E) criterion: records supplied history, assesses longitudinal evolution across image visits, and raises missing-information questions |
 | `EvidenceAgent` | The only retrieval path. BGE embeddings + Qdrant + BM25 + RRF fusion + cross-encoder reranking + parent expansion + HyDE-capable queries, with bounded evidence-gap follow-up cycles |
 | `ReportAgent` | Synthesizes results, explanation, and uncertainty into a validated JSON report, and renders a PDF when available |
 
-**Clinical context** (evolution history and patient-reported information) is an internal utility of the Orchestrator workflow, not a separate agent. It records supplied history, asks for missing evolution/context, and never infers patient history from a single image.
+**Clinical context safety:** the `ClinicalContextAgent` records supplied evolution/history and asks for what is missing, but **never infers patient history from a single image** — when no history is supplied, Evolution (E) stays `unavailable` and a clinical question is raised.
 
 ### Flow
 
 ```text
 image / supplied context -> Orchestrator -> CaseState -> decide next tool
-                                         -> Vision | Evidence
+                                         -> Vision | Clinical Context | Evidence
                                          -> Orchestrator -> Report -> JSON / PDF
 ```
 
@@ -77,6 +78,7 @@ Pixel measurements are always `{unit: "pixels", calibrated: false}`. No millimet
 │   │   ├── state.py        # CaseState contract
 │   │   ├── orchestrator.py # OrchestratorAgent
 │   │   ├── vision.py       # VisionAgent
+│   │   ├── clinical_context.py # ClinicalContextAgent
 │   │   ├── evidence.py     # EvidenceAgent
 │   │   └── report.py       # ReportAgent
 │   └── ...                 # TODO: adjust to your actual layout
