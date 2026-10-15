@@ -513,6 +513,10 @@ Respond in valid JSON only:
             image_path=str(image_path),
             status="running",
             historical_images=historical_images or [],
+            clinical_context={
+                key: value for key, value in (clinical_context or {}).items()
+                if key in {"history", "patient_history", "patient_id"}
+            },
         )
 
         for step_idx in range(self.max_steps):

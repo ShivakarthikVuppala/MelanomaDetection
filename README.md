@@ -69,23 +69,43 @@ Pixel measurements are always `{unit: "pixels", calibrated: false}`. No millimet
 
 ```text
 .
-├── main.py                 # CLI entry point
-├── requirements.txt
+├── main.py                     # Unified CLI entry point (serve, orchestrate, build-rag)
+├── config.yaml                 # System, model, and orchestrator configuration
+├── requirements.txt            # Python dependencies
+├── package.json                # Project and frontend scripts
 ├── assets/
-│   └── architecture.png
+│   └── architecture.png        # Four-agent system architecture diagram
+├── api/
+│   ├── server.py               # FastAPI backend & WebSocket/streaming endpoints
+│   ├── auth.py                 # User authentication & role-based access control
+│   ├── admin.py                # Admin portal routes
+│   └── schemas.py              # Pydantic request/response schemas
+├── frontend-ui/                # React / Vite frontend application
+│   ├── src/
+│   │   ├── pages/              # Upload, Dashboard, PatientHistory, Reports, etc.
+│   │   └── components/         # UI components & notification providers
+├── rag_pipeline/               # Medical literature hybrid retrieval engine
+│   ├── query_engine.py         # Dense vector + BM25 retrieval & RRF reranking
+│   ├── create_vector_db.py     # Qdrant vector index builder
+│   ├── reranker.py             # Cross-encoder reranker
+│   └── cleaned_documents/      # Curated dermatology reference literature
 ├── src/
-│   ├── agents/
-│   │   ├── state.py        # CaseState contract
-│   │   ├── orchestrator.py # OrchestratorAgent
-│   │   ├── vision.py       # VisionAgent
-│   │   ├── clinical_context.py # ClinicalContextAgent
-│   │   ├── evidence.py     # EvidenceAgent
-│   │   └── report.py       # ReportAgent
-│   └── ...                 # TODO: adjust to your actual layout
-└── tests/
+│   ├── agents/                 # Top-level multi-agent system
+│   │   ├── orchestrator.py     # OrchestratorAgent (Hybrid Guided Reasoning loop)
+│   │   ├── vision.py           # VisionAgent (dual-branch SwinV2 & SegFormer)
+│   │   ├── clinical_context.py # ClinicalContextAgent (history & evolution)
+│   │   ├── evidence.py         # EvidenceAgent (hybrid medical RAG retrieval)
+│   │   ├── report.py           # ReportAgent (clinical synthesis & PDF rendering)
+│   │   ├── abcde_fusion.py     # Multimodal ABCDE fusion engine
+│   │   ├── explainability.py   # Gemini LLM clinical explanation service
+│   │   └── state.py            # CaseState typed data contract
+│   ├── classification/         # Swin Transformer V2 training & inference
+│   ├── segmentation/           # SegFormer lesion boundary delineation
+│   ├── features/               # Quantitative ABCD feature extractors
+│   ├── engine/                 # Core diagnosis, scale calibration & quality check
+│   └── evaluation/             # Metrics, validation & benchmark suites
+└── tests/                      # Architectural, comparator & integration tests
 ```
-
-> TODO: replace the tree above with the output of `tree -L 3` from your repo.
 
 ---
 
@@ -101,12 +121,18 @@ pip install -r requirements.txt
 
 **Required before running:**
 
-1. **Model checkpoints:** place the SwinV2 classifier and SegFormer segmentation checkpoints at the paths set in your config. TODO: add paths or download links.
-2. **RAG index:** build it once with:
+1. **Model checkpoints:** place the trained weights at the paths defined in `config.yaml`:
+   - Classifier: `checkpoints/best_swin_checkpoint.pth` (Swin Transformer V2 base window12to16 192to256)
+   - Segmentation: `checkpoints/best_segformer_melanoma.pth` (SegFormer mit_b2)
+2. **RAG index:** build the medical vector database with:
 ```bash
    python main.py build-rag
 ```
-3. **Environment:** TODO: list required variables (e.g. Qdrant URL, LLM provider/API key). Image-only validation works without them.
+3. **Environment:** configure environment variables in `.env` (image-only validation works without external services):
+   - `GEMINI_API_KEY`: Google Gemini API key for clinical explanation synthesis and orchestrator cognitive deliberation.
+   - `QDRANT_URL`: URL for the Qdrant vector database (defaults to in-memory local storage if omitted, or `http://localhost:6333`).
+   - `QDRANT_API_KEY`: API key if connecting to a remote Qdrant Cloud cluster.
+   - `MONGODB_URI`: MongoDB connection string for user accounts and patient records (defaults to `mongodb://localhost:27017`).
 
 ---
 
@@ -116,26 +142,29 @@ pip install -r requirements.txt
 
 ```bash
 python main.py orchestrate path/to/image.jpg   # run the full agent workflow
-python main.py serve                           # start the API server
-python -m pytest -q                            # run tests
+python main.py serve                           # start the FastAPI server on port 8000
+python -m pytest tests/                        # run test suite
 ```
 
 ### API
 
-`POST /api/analyze` is the single canonical analysis endpoint (multipart form).
+`POST /api/analyze` is the single canonical analysis endpoint (multipart form) hosted on `http://localhost:8000`.
 
 | Field | Required | Description |
 |---|---|---|
-| `image` | yes | Dermoscopic image (TODO: confirm field name) |
-| `clinical_context_json` | no | JSON object with supplied clinical context |
+| `image` | yes | Dermoscopic lesion image file (JPEG, PNG) |
+| `clinical_context_json` | no | JSON string containing patient clinical history and reported evolution |
+| `patient_id` | no | Patient identifier string (enables longitudinal visit tracking across encounters) |
+| `patient_name` | no | Patient full name (auto-filled on ID lookup) |
+| `scale_method` | no | Calibration method: `auto` (default), `manual`, or `none` |
+| `scale_reference_mm` | no | Reference dimension in millimeters if using manual calibration |
 
 ```bash
 curl -X POST http://localhost:8000/api/analyze \
   -F "image=@path/to/image.jpg" \
-  -F 'clinical_context_json={"evolution": {"reported_change": true, "timeframe_months": 3}}'
+  -F 'clinical_context_json={"evolution": {"reported_change": true, "timeframe_months": 3}}' \
+  -F "patient_id=PT-2024-001"
 ```
-
-> TODO: confirm host/port and field names against your FastAPI app.
 
 **Response includes:**
 
@@ -147,16 +176,31 @@ curl -X POST http://localhost:8000/api/analyze \
 
 ## Data and Models
 
-| Component | Detail |
-|---|---|
-| Classifier | SwinV2 (TODO: variant, input size) |
-| Segmentation | SegFormer (TODO: variant) |
-| Training data | TODO: e.g. ISIC 2018 / ISIC 2020, with split details |
-| Retrieval | BGE embeddings, Qdrant, BM25, RRF, cross-encoder reranker |
+| Component | Architecture / Detail | Configuration |
+|---|---|---|
+| **Classifier** | Swin Transformer V2 (`swinv2_base_window12to16_192to256`) | Input: 256×256 px, 2 classes (melanoma, non_melanoma), classification threshold: 0.3775 (optimized via Youden's J for sensitivity ≥ 0.90 floor) |
+| **Segmentation** | SegFormer (`mit_b2`) | Input: 256×256 px, morphological closing kernel: 5, binary lesion mask output |
+| **Feature Extraction** | OpenCV & scikit-image morphometrics | Inertial principal-axis asymmetry (A), compactness & radial variance border irregularity (B), CIE Lab K-means color variegation (C), metric scale calibration (D) |
+| **Temporal Evolution** | ClinicalContextAgent comparator | Cross-visit surface area delta, max diameter delta, and temporal progression categorization (`clear_evolution`, `possible_evolution`, `no_significant_evolution`) |
+| **Multimodal Fusion** | ABCDEFusionScorer | Base weights: Classifier 0.60, Evolution 0.15, Asymmetry 0.08, Border 0.07, Color 0.06, Diameter 0.04 (dynamic reallocation when parameters uncalibrated) |
+| **Retrieval Engine** | Hybrid RAG Pipeline | `BAAI/bge-large-en-v1.5` dense embeddings, Qdrant vector database, BM25 sparse index, Reciprocal Rank Fusion (RRF), Cross-Encoder reranker, HyDE query expansion |
+| **Cognitive Reasoning** | Google Gemini (`gemini-3.8-flash` / `gemini-3.1-flash-lite`) | Evidence deliberation, clinical uncertainty evaluation, grounded explanation generation |
+| **Training Data** | ISIC Archive Challenge Datasets | Preprocessed dermoscopic imagery with hair removal (black-hat morphology) and illumination normalization; partitioned into stratified train, validation, and held-out test splits |
 
-### Results
+### Evaluation Results
 
-> TODO: add held-out test metrics (AUC, sensitivity, specificity) with dataset and split. Report specificity alongside accuracy; melanoma data is heavily imbalanced.
+Evaluated across 15,579 held-out dermoscopic images with multimodal ABCDE fusion:
+
+| Metric | Value | Detail |
+|---|---|---|
+| **Total Images Processed** | 15,579 | Full benchmark test set |
+| **Overall Accuracy** | 98.86% | 15,401 / 15,579 correct classifications |
+| **Specificity** | 99.54% | 15,304 True Negatives / 71 False Positives |
+| **Sensitivity (Recall)** | 47.55% | 97 True Positives / 107 False Negatives (at standard 0.50 operating threshold) |
+| **Youden-Optimized Threshold** | 0.3775 | Calibrated floor threshold to prioritize sensitivity (≥ 0.90) in clinical screening |
+
+> **Note on Imbalance:** Dermoscopic challenge test sets reflect extreme class imbalance (less than 1.5% true positive melanoma prevalence). Reporting high specificity (99.54%) alongside sensitivity is critical to avoid catastrophic false-alarm rates in clinical triage.
+
 
 ---
 

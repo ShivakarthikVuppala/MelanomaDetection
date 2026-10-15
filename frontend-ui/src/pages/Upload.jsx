@@ -60,6 +60,8 @@ export default function Upload({ onAnalysisComplete, onNavigate }) {
   const { startReportRunning, setReportCompleted, setReportFailed } = useNotification();
   const navigate = useNavigate();
   const inputRef = useRef(null);
+  const historicalInputRef = useRef(null);
+  const patientIdRef = useRef('');
 
   const isPrivileged = PRIVILEGED_ROLES.has(user?.role);
   const isTestAccount = Boolean(user?.is_test_account);
@@ -73,6 +75,8 @@ export default function Upload({ onAnalysisComplete, onNavigate }) {
   const [patientError, setPatientError] = useState(null);
   const [existingPatients, setExistingPatients] = useState([]);
   const [patientAutofilled, setPatientAutofilled] = useState(false);
+  const [patientHistoryVisits, setPatientHistoryVisits] = useState([]);
+  const [loadingPatientHistory, setLoadingPatientHistory] = useState(false);
 
   // Load practitioner's existing patients for instant name auto-fill
   useEffect(() => {
@@ -88,22 +92,66 @@ export default function Upload({ onAnalysisComplete, onNavigate }) {
     }
   }, [token, isPrivileged]);
 
-  // When doctor types or selects a patient ID, auto-fill the full name
-  const handlePatientIdChange = (rawId) => {
-    setPatientId(rawId);
-    setPatientError(null);
-    const trimmed = rawId.trim().toLowerCase();
-    if (!trimmed) {
-      setPatientAutofilled(false);
+  // Fetch previous visits for the specific patient ID entered
+  const fetchPatientHistory = useCallback(async (pid) => {
+    const trimmed = (pid || '').trim();
+    if (!trimmed || !token) {
+      setPatientHistoryVisits([]);
+      setLoadingPatientHistory(false);
       return;
     }
+    setLoadingPatientHistory(true);
+    try {
+      const res = await fetch(`/api/patients/${encodeURIComponent(trimmed)}/history`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setPatientHistoryVisits(Array.isArray(data) ? data : []);
+      } else {
+        setPatientHistoryVisits([]);
+      }
+    } catch (err) {
+      console.warn('Could not load patient history preview', err);
+      setPatientHistoryVisits([]);
+    } finally {
+      setLoadingPatientHistory(false);
+    }
+  }, [token]);
+
+  // Automatically fetch visit history preview when patientId changes
+  useEffect(() => {
+    const trimmed = patientId.trim();
+    if (!trimmed || !token || !isPrivileged) {
+      setPatientHistoryVisits([]);
+      setLoadingPatientHistory(false);
+      return;
+    }
+    const timer = setTimeout(() => {
+      fetchPatientHistory(trimmed);
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [patientId, token, isPrivileged, fetchPatientHistory]);
+
+  // When doctor types or selects a patient ID, auto-fill the full name
+  const handlePatientIdChange = (rawId) => {
+    const trimmed = rawId.trim();
+    if (trimmed !== patientIdRef.current) {
+      setHistoricalFiles([]);
+      setNotes('');
+      if (historicalInputRef.current) historicalInputRef.current.value = '';
+    }
+    patientIdRef.current = trimmed;
+    setPatientId(rawId);
+    setPatientError(null);
     const matched = existingPatients.find(
-      (p) => p.patient_id?.toLowerCase() === trimmed
+      (p) => p.patient_id.toLowerCase() === trimmed.toLowerCase()
     );
     if (matched && matched.patient_name) {
       setPatientName(matched.patient_name);
       setPatientAutofilled(true);
     } else {
+      setPatientName('');
       setPatientAutofilled(false);
     }
   };
@@ -118,7 +166,7 @@ export default function Upload({ onAnalysisComplete, onNavigate }) {
       });
       if (res.ok) {
         const data = await res.json();
-        if (data.found && data.patient_name) {
+        if (patientIdRef.current === trimmed && data.found && data.patient_name) {
           setPatientName(data.patient_name);
           setPatientAutofilled(true);
         }
@@ -126,19 +174,19 @@ export default function Upload({ onAnalysisComplete, onNavigate }) {
     } catch {
       // fallback silently
     }
+    fetchPatientHistory(trimmed);
   };
 
   const selectExistingPatient = (patient) => {
-    setPatientId(patient.patient_id);
+    handlePatientIdChange(patient.patient_id);
     setPatientName(patient.patient_name);
     setPatientAutofilled(true);
     setPatientError(null);
+    fetchPatientHistory(patient.patient_id);
   };
 
   const [file, setFile] = useState(null);
   const [historicalFiles, setHistoricalFiles] = useState([]);
-  const [historyRecords, setHistoryRecords] = useState([]);
-  const [selectedHistoryIds, setSelectedHistoryIds] = useState(new Set());
   const [preview, setPreview] = useState(null);
   const [dragOver, setDragOver] = useState(false);
   const [error, setError] = useState(null);
@@ -151,19 +199,6 @@ export default function Upload({ onAnalysisComplete, onNavigate }) {
   // Optional contextual location
   const [lesionLocation, setLesionLocation] = useState('Arm');
   const [notes, setNotes] = useState('');
-
-  useEffect(() => {
-    if (token) {
-      fetch('/api/analyses', { headers: { Authorization: `Bearer ${token}` } })
-        .then(res => res.ok ? res.json() : [])
-        .then(data => {
-          if (Array.isArray(data)) {
-            setHistoryRecords(data.slice(0, 6)); // Show recent 6
-          }
-        })
-        .catch(err => console.error("Failed to load history", err));
-    }
-  }, [token]);
 
   const selectFile = useCallback(async (candidate) => {
     if (!candidate) return;
@@ -194,6 +229,7 @@ export default function Upload({ onAnalysisComplete, onNavigate }) {
     setWorkflowState('idle');
     setCompletedAnalysis(null);
     if (inputRef.current) inputRef.current.value = '';
+    if (historicalInputRef.current) historicalInputRef.current.value = '';
   };
 
   const startAnalysis = async () => {
@@ -259,10 +295,6 @@ export default function Upload({ onAnalysisComplete, onNavigate }) {
       historicalFiles.forEach(hf => {
         formData.append('historical_files', hf);
       });
-
-      if (selectedHistoryIds.size > 0) {
-        formData.append('historical_analysis_ids', JSON.stringify(Array.from(selectedHistoryIds)));
-      }
 
       const result = await new Promise((resolve, reject) => {
         const request = new XMLHttpRequest();
@@ -616,7 +648,7 @@ export default function Upload({ onAnalysisComplete, onNavigate }) {
                             </label>
                             <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
                               {isTestAccount
-                                ? 'Optional — test account uploads are not linked to longitudinal history.'
+                                ? 'Optional — provide a patient ID to use and save that patient\'s history.'
                                 : 'Required — uploads are linked to this patient\'s history for evolution tracking.'}
                             </div>
                           </div>
@@ -743,60 +775,121 @@ export default function Upload({ onAnalysisComplete, onNavigate }) {
                         </div>
                         <div>
                           <label className="context-label" style={{ marginBottom: '2px', color: 'var(--primary)', fontSize: '15px' }}>Longitudinal Tracking (Evolution)</label>
-                          <div style={{ color: 'var(--text-muted)', fontSize: '13px' }}>Select previous checks to assess temporal changes in the lesion</div>
+                          <div style={{ color: 'var(--text-muted)', fontSize: '13px' }}>
+                            {patientId.trim()
+                                ? `All available history for patient ${patientId.trim()} is included automatically. New patients start with no stored history.`
+                                : 'Enter a patient ID to use that patient\'s complete available history. New patients start with no stored history.'}
+                          </div>
                         </div>
                       </div>
 
-                      {historyRecords.length > 0 && (
-                        <div style={{ marginBottom: '16px' }}>
-                          <div style={{ fontSize: '13px', fontWeight: '500', marginBottom: '8px', color: 'var(--text-secondary)' }}>Select from your history:</div>
-                          <div style={{ display: 'flex', gap: '10px', overflowX: 'auto', paddingBottom: '8px' }}>
-                            {historyRecords.map(record => {
-                              const isSelected = selectedHistoryIds.has(record.analysis_id);
-                              return (
-                                <div 
-                                  key={record.analysis_id}
-                                  onClick={() => {
-                                    const next = new Set(selectedHistoryIds);
-                                    if (next.has(record.analysis_id)) next.delete(record.analysis_id);
-                                    else next.add(record.analysis_id);
-                                    setSelectedHistoryIds(next);
-                                  }}
-                                  style={{
-                                    flex: '0 0 auto', width: '70px', height: '70px', borderRadius: '8px', cursor: 'pointer',
-                                    border: isSelected ? '2px solid var(--primary)' : '1px solid var(--border)',
-                                    background: `url(/static/uploads/${record.analysis_id}.png) center/cover`,
-                                    position: 'relative', opacity: isSelected ? 1 : 0.7, transition: 'all 0.2s'
-                                  }}
-                                >
-                                  {isSelected && (
-                                    <div style={{ position: 'absolute', top: '-6px', right: '-6px', background: 'var(--primary)', color: '#fff', borderRadius: '50%', width: '20px', height: '20px', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '12px' }}>
-                                      <i className="fas fa-check"></i>
-                                    </div>
-                                  )}
-                                </div>
-                              )
-                            })}
+                      {/* Patient Historical Visits Preview */}
+                      {patientId.trim() && (
+                        <div className="patient-history-preview" style={{ marginBottom: '16px', background: 'var(--bg-main, #f8fafc)', padding: '12px', borderRadius: '8px', border: '1px solid var(--border)' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+                            <span style={{ fontSize: '13px', fontWeight: '600', color: 'var(--text-main)' }}>
+                              <i className="fas fa-history" style={{ marginRight: '6px', color: 'var(--primary)' }}></i>
+                              Prior Visits for Patient {patientId.trim()} {patientName ? `(${patientName})` : ''}
+                            </span>
+                            {loadingPatientHistory && (
+                              <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+                                <i className="fas fa-spinner fa-spin" style={{ marginRight: '4px' }}></i> Checking history…
+                              </span>
+                            )}
                           </div>
+
+                          {!loadingPatientHistory && patientHistoryVisits.length === 0 && (
+                            <div style={{ fontSize: '12px', color: 'var(--text-muted)', fontStyle: 'italic', padding: '6px 0' }}>
+                              <i className="fas fa-info-circle" style={{ marginRight: '5px' }}></i>
+                              No previous visits recorded for Patient <strong>{patientId.trim()}</strong> under your account. This scan will establish the baseline visit.
+                            </div>
+                          )}
+
+                          {!loadingPatientHistory && patientHistoryVisits.length > 0 && (
+                            <div>
+                              <div style={{ fontSize: '12px', color: 'var(--primary)', marginBottom: '8px', fontWeight: '500' }}>
+                                <i className="fas fa-check-circle" style={{ marginRight: '4px' }}></i>
+                                {patientHistoryVisits.length} prior {patientHistoryVisits.length === 1 ? 'visit' : 'visits'} automatically included for parameter E calculation:
+                              </div>
+                              <div style={{ display: 'flex', gap: '10px', overflowX: 'auto', paddingBottom: '8px' }}>
+                                {patientHistoryVisits.map((item, idx) => {
+                                  const dateStr = item.timestamp ? new Date(item.timestamp).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : 'Previous';
+                                  const isMalignant = String(item.prediction).toLowerCase().includes('melanoma') && !String(item.prediction).toLowerCase().includes('non');
+                                  return (
+                                    <div
+                                      key={item.analysis_id || idx}
+                                      style={{
+                                        flex: '0 0 auto',
+                                        width: '84px',
+                                        textAlign: 'center',
+                                        background: 'var(--bg-card, #ffffff)',
+                                        borderRadius: '8px',
+                                        padding: '6px',
+                                        border: '1px solid var(--border)',
+                                        boxShadow: '0 1px 3px rgba(0,0,0,0.06)'
+                                      }}
+                                    >
+                                      <div
+                                        style={{
+                                          width: '72px',
+                                          height: '72px',
+                                          borderRadius: '6px',
+                                          margin: '0 auto 4px auto',
+                                          background: `#f1f5f9 url(/static/uploads/${item.analysis_id}.png) center/cover no-repeat`,
+                                          border: '1px solid var(--border)',
+                                        }}
+                                        title={`Visit ${idx + 1}: ${item.prediction || 'Completed'} (${dateStr})`}
+                                      />
+                                      <div style={{ fontSize: '10px', color: 'var(--text-muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                        {dateStr}
+                                      </div>
+                                      <div
+                                        style={{
+                                          fontSize: '10px',
+                                          fontWeight: '600',
+                                          color: isMalignant ? 'var(--danger, #ef4444)' : 'var(--success, #10b981)',
+                                          whiteSpace: 'nowrap',
+                                          overflow: 'hidden',
+                                          textOverflow: 'ellipsis'
+                                        }}
+                                      >
+                                        {item.prediction || 'Complete'}
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          )}
                         </div>
                       )}
 
-                      <div style={{ fontSize: '13px', fontWeight: '500', marginBottom: '8px', color: 'var(--text-secondary)' }}>Or upload from computer:</div>
+                      <label htmlFor="upload-additional-files" className="context-label" style={{ fontSize: '13px' }}>Upload additional images if available (optional, multiple files)</label>
+                      <p style={{ color: 'var(--text-muted)', fontSize: '13px', marginBottom: '8px' }}>Choose earlier images of this patient's lesion. JPG, JPEG, PNG or WEBP, up to {MAX_MB} MB per file.</p>
                       <input
+                        id="upload-additional-files"
+                        ref={historicalInputRef}
                         type="file"
                         multiple
                         accept=".jpeg,.jpg,.png,.webp,image/jpeg,image/png,image/webp"
                         onChange={(e) => {
-                          if (e.target.files?.length) {
-                            setHistoricalFiles(Array.from(e.target.files));
+                          const candidates = Array.from(e.target.files || []);
+                          const invalidFile = candidates.find(candidate => validateFile(candidate));
+                          if (invalidFile) {
+                            setError(`${invalidFile.name}: ${validateFile(invalidFile)}`);
+                            e.target.value = '';
+                            setHistoricalFiles([]);
+                            return;
                           }
+                          setHistoricalFiles(candidates);
+                          setError(null);
                         }}
                         style={{ display: 'block', fontSize: '14px', width: '100%', padding: '8px', background: 'var(--bg-main)', borderRadius: '6px', border: '1px solid var(--border)' }}
                       />
-                      {(historicalFiles.length > 0 || selectedHistoryIds.size > 0) && (
+                      {historicalFiles.length > 0 && (
                         <div style={{ marginTop: '12px', fontSize: '13px', color: 'var(--primary)', fontWeight: '500', display: 'flex', alignItems: 'center', gap: '6px' }}>
                           <i className="fas fa-check-circle"></i>
-                          {historicalFiles.length + selectedHistoryIds.size} historical image(s) selected for temporal comparison
+                          {historicalFiles.length} additional image(s) selected for this patient
                         </div>
                       )}
                     </div>

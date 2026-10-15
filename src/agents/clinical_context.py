@@ -16,9 +16,12 @@ class ClinicalContextAgent:
 
     def update(self, state: CaseState, supplied: Dict[str, Any] | None = None) -> CaseState:
         supplied = supplied or {}
-        for key in ("evolution", "duration", "reported_size_change", "shape_change", "color_change", "symptoms", "history"):
+        for key in ("evolution", "duration", "reported_size_change", "shape_change", "color_change", "symptoms", "history", "notes"):
             if key in supplied and supplied[key] is not None:
-                state.clinical_context[key] = supplied[key]
+                if key == "evolution" and state.historical_images and isinstance(state.clinical_context.get("evolution"), dict):
+                    state.clinical_context["reported_evolution"] = supplied[key]
+                else:
+                    state.clinical_context[key] = supplied[key]
         evolution = state.clinical_context.get("evolution")
         if evolution is None:
             state.abcde["E"] = ABCDEFeature("E", "unavailable", {}, limitation="Evolution cannot be determined from a single image; no history was supplied.")
