@@ -25,12 +25,14 @@ import Login from './pages/Login';
 import Signup from './pages/Signup';
 import Profile from './pages/Profile';
 import AdminApp from './pages/admin/AdminApp';
+import PatientHistory from './pages/PatientHistory';
 
 function getActivePage(pathname) {
   if (pathname.startsWith('/home') || pathname === '/') return 'home';
   if (pathname.startsWith('/upload') || pathname.startsWith('/new-check')) return 'upload';
   if (pathname.startsWith('/results')) return 'results';
   if (pathname.startsWith('/history') || pathname.startsWith('/reports')) return 'history';
+  if (pathname.startsWith('/patients')) return 'patients';
   if (pathname.startsWith('/profile')) return 'profile';
   if (pathname.startsWith('/settings')) return 'settings';
   if (pathname.startsWith('/help')) return 'help';
@@ -174,6 +176,7 @@ export default function App() {
                   <Route path="/results/:reportId" element={<Results />} />
                   <Route path="/history" element={<Reports mode="history" />} />
                   <Route path="/reports" element={<Navigate to="/history" replace />} />
+                  <Route path="/patients" element={<PatientHistory />} />
                   <Route path="/profile" element={<Profile />} />
                   <Route path="/settings" element={<Settings />} />
                   <Route path="/help" element={<Help />} />

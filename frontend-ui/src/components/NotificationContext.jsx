@@ -110,13 +110,19 @@ export function NotificationProvider({ children }) {
     }
   }, [notification, storageKey]);
 
-  const startReportRunning = useCallback(() => {
+  const startReportRunning = useCallback((details = {}) => {
     setNotification({
       status: 'running',
       title: 'Report Running',
       message: 'Your analysis report is currently being generated.',
       unread: true,
       timestamp: new Date().toISOString(),
+      patient_id: details.patient_id || null,
+      patient_name: details.patient_name || null,
+      imagePreview: details.imagePreview || null,
+      lesionLocation: details.lesionLocation || null,
+      notes: details.notes || null,
+      ...details,
     });
   }, []);
 
@@ -129,6 +135,8 @@ export function NotificationProvider({ children }) {
       message: 'Your analysis report is ready to view.',
       unread: true,
       timestamp: new Date().toISOString(),
+      patient_id: report?.patient_id || null,
+      patient_name: report?.patient_name || null,
     });
   }, []);
 

@@ -3,6 +3,12 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../components/AuthContext';
 import { useToast } from '../components/Toast';
 
+const ROLE_OPTIONS = [
+  { value: 'user', icon: 'fa-user', title: 'Patient / Individual', desc: 'View and track your own skin check reports' },
+  { value: 'practitioner', icon: 'fa-user-doctor', title: 'Medical Practitioner', desc: 'Upload and analyze images on behalf of patients' },
+  { value: 'researcher', icon: 'fa-flask', title: 'Clinical Researcher', desc: 'Upload and analyze images for research' },
+];
+
 export default function Signup({ onNavigate }) {
   const { signup, verifyEmail, resendOtp } = useAuth();
   const showToast = useToast();
@@ -18,6 +24,7 @@ export default function Signup({ onNavigate }) {
     email: '',
     password: '',
     confirm_password: '',
+    role: 'user',
   });
 
   const [otp, setOtp] = useState('');
@@ -85,6 +92,7 @@ export default function Signup({ onNavigate }) {
         phone: form.phone.trim(),
         email: form.email.trim(),
         password: form.password,
+        role: form.role,
       });
       setRegisteredEmail(data.email || form.email.trim());
       setStep('verify');
@@ -182,6 +190,57 @@ export default function Signup({ onNavigate }) {
 
         {step === 'form' ? (
           <form onSubmit={handleSubmit} noValidate className="auth-minimal-form">
+            <div className="form-group">
+              <label className="form-label">I am signing up as</label>
+              <div style={{ display: 'grid', gap: '8px' }}>
+                {ROLE_OPTIONS.map((opt) => {
+                  const selected = form.role === opt.value;
+                  return (
+                    <button
+                      key={opt.value}
+                      type="button"
+                      onClick={() => setForm((prev) => ({ ...prev, role: opt.value }))}
+                      disabled={loading}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '12px',
+                        textAlign: 'left',
+                        padding: '12px 14px',
+                        borderRadius: '10px',
+                        cursor: loading ? 'default' : 'pointer',
+                        background: selected ? 'var(--primary-bg, rgba(37,99,235,0.08))' : 'var(--bg-card, transparent)',
+                        border: `1px solid ${selected ? 'var(--primary, #2563eb)' : 'var(--border, #d1d5db)'}`,
+                        transition: 'all 0.15s',
+                      }}
+                      aria-pressed={selected}
+                    >
+                      <span
+                        style={{
+                          flex: '0 0 auto',
+                          width: '34px',
+                          height: '34px',
+                          borderRadius: '50%',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          background: selected ? 'var(--primary, #2563eb)' : 'var(--bg-main, rgba(0,0,0,0.05))',
+                          color: selected ? '#fff' : 'var(--text-secondary)',
+                        }}
+                        aria-hidden="true"
+                      >
+                        <i className={`fas ${opt.icon}`}></i>
+                      </span>
+                      <span style={{ display: 'flex', flexDirection: 'column' }}>
+                        <strong style={{ fontSize: '14px', color: 'var(--text-primary)' }}>{opt.title}</strong>
+                        <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>{opt.desc}</span>
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
               <div className="form-group">
                 <label className="form-label" htmlFor="signup-first-name">

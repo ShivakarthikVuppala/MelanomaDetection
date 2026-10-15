@@ -4040,3 +4040,522 @@ html.dark,
   text-transform: capitalize;
   margin-top: 4px;
 }
+
+/* ==========================================================================
+   Patient History Page
+   ========================================================================== */
+
+.patient-history-layout {
+  display: grid;
+  grid-template-columns: 340px 1fr;
+  gap: 24px;
+  align-items: start;
+}
+
+@media (max-width: 860px) {
+  .patient-history-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+.patient-list-col {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.patient-list-scroll {
+  max-height: calc(100vh - 260px);
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+/* Patient List Card */
+.patient-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  cursor: pointer;
+  border-left: 3px solid transparent;
+  transition: border-color 0.18s, background 0.18s, box-shadow 0.18s;
+  gap: 12px;
+}
+
+.patient-card:hover,
+.patient-card:focus-visible {
+  border-left-color: var(--primary);
+  background: var(--primary-light);
+  outline: none;
+}
+
+.patient-card--active {
+  border-left-color: var(--primary) !important;
+  background: var(--primary-light) !important;
+}
+
+.patient-card-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  flex: 1;
+}
+
+.patient-card-right {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.patient-avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: var(--primary-light);
+  color: var(--primary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+  flex-shrink: 0;
+}
+
+.patient-avatar--lg {
+  width: 52px;
+  height: 52px;
+  font-size: 30px;
+}
+
+.patient-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.patient-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.patient-id-tag {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: 'Courier New', monospace;
+}
+
+.patient-stats {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+}
+
+.patient-upload-count {
+  font-size: 12px;
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.patient-last-date {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.patient-chevron {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+/* Patient Timeline Column */
+.patient-timeline-col {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.patient-timeline-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 64px 32px;
+  gap: 16px;
+}
+
+.patient-timeline-empty-icon {
+  font-size: 48px;
+  color: var(--primary-border);
+}
+
+.patient-timeline-empty-title {
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.patient-timeline-empty-desc {
+  font-size: 14px;
+  color: var(--text-secondary);
+  max-width: 360px;
+  margin: 0;
+}
+
+/* Patient timeline header card */
+.patient-timeline-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 20px 24px;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.patient-timeline-header-left {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.patient-timeline-name {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 0 0 4px;
+}
+
+.patient-timeline-stats {
+  display: flex;
+  gap: 24px;
+}
+
+.patient-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+}
+
+.patient-stat-value {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--primary);
+}
+
+.patient-stat-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+/* Visit Timeline */
+.visit-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.visit-timeline-item {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.visit-timeline-connector {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding-top: 20px;
+  flex-shrink: 0;
+  width: 20px;
+}
+
+.visit-dot {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid;
+  flex-shrink: 0;
+}
+
+.visit-dot--ok {
+  background: var(--primary);
+  border-color: var(--primary);
+}
+
+.visit-dot--failed {
+  background: var(--bg-subtle);
+  border-color: var(--text-muted);
+}
+
+.visit-line {
+  width: 2px;
+  flex: 1;
+  background: var(--border);
+  min-height: 24px;
+  margin-top: 4px;
+}
+
+.visit-card {
+  flex: 1;
+  margin-bottom: 16px;
+  padding: 0;
+  overflow: hidden;
+}
+
+.visit-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.visit-number {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--primary);
+  margin-right: 10px;
+}
+
+.visit-date {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.visit-badges {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.visit-confidence {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.visit-card-body {
+  display: flex;
+  gap: 16px;
+  padding: 14px 16px;
+  align-items: flex-start;
+}
+
+.visit-image-box {
+  width: 80px;
+  height: 80px;
+  border-radius: 8px;
+  overflow: hidden;
+  flex-shrink: 0;
+  border: 1px solid var(--border);
+  background: var(--bg-subtle);
+}
+
+.visit-thumb {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.visit-thumb-fallback {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  font-size: 22px;
+}
+
+.visit-details {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 1;
+}
+
+.visit-detail-row {
+  display: flex;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.visit-detail-label {
+  color: var(--text-muted);
+  min-width: 90px;
+  flex-shrink: 0;
+}
+
+.visit-detail-value {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.visit-analysis-id {
+  font-family: 'Courier New', monospace;
+  font-size: 12px;
+  color: var(--primary);
+  background: var(--primary-light);
+  padding: 1px 6px;
+  border-radius: 4px;
+}
+
+.visit-card-actions {
+  padding: 10px 16px 14px;
+  border-top: 1px solid var(--border);
+}
+
+/* ==========================================================================
+   Upload Page — Patient Fields (Privileged Users)
+   ========================================================================== */
+
+.patient-context-section {
+  background: var(--primary-light);
+  border: 1px solid var(--primary-border);
+  border-radius: 12px;
+  padding: 16px;
+  margin-top: 16px;
+}
+
+.patient-context-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.patient-context-icon {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: var(--primary);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 15px;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.patient-fields-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+@media (max-width: 600px) {
+  .patient-fields-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+.patient-field-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* ==========================================================================
+   Running Report in Patient Records & Auto-fill Badges
+   ========================================================================== */
+.badge-running {
+  background: rgba(14, 165, 233, 0.12) !important;
+  color: #0284c7 !important;
+  border: 1px solid rgba(14, 165, 233, 0.3) !important;
+  font-weight: 600 !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 5px !important;
+}
+
+.visit-dot--running {
+  background: #0284c7 !important;
+  box-shadow: 0 0 0 4px rgba(14, 165, 233, 0.25) !important;
+  animation: pulse-dot 1.8s infinite ease-in-out !important;
+}
+
+@keyframes pulse-dot {
+  0%, 100% {
+    box-shadow: 0 0 0 3px rgba(14, 165, 233, 0.25);
+    transform: scale(1);
+  }
+  50% {
+    box-shadow: 0 0 0 7px rgba(14, 165, 233, 0.1);
+    transform: scale(1.15);
+  }
+}
+
+.visit-card--running {
+  border-left: 3px solid #0284c7 !important;
+  background: linear-gradient(135deg, rgba(14, 165, 233, 0.04) 0%, rgba(255, 255, 255, 0.95) 100%) !important;
+}
+
+.running-progress-track {
+  width: 100%;
+  height: 6px;
+  background: var(--bg-surface, #e2e8f0);
+  border-radius: 999px;
+  overflow: hidden;
+  position: relative;
+  margin-top: 6px;
+}
+
+.running-progress-bar {
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(90deg, #0284c7 0%, #38bdf8 50%, #0284c7 100%);
+  background-size: 200% 100%;
+  border-radius: 999px;
+  animation: running-bar-slide 1.6s linear infinite;
+}
+
+@keyframes running-bar-slide {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+.patient-autofill-hint {
+  animation: fadeIn 0.2s ease-in;
+}
+
+.patient-chip-btn {
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  color: var(--text-secondary);
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.patient-chip-btn:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+  background: rgba(14, 165, 233, 0.06);
+}

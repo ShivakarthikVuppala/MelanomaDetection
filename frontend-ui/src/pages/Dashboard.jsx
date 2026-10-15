@@ -136,6 +136,8 @@ export default function Home({ onNavigate, onViewReport }) {
 
   const latestRisk = latestAnalysis ? getRiskInfo(latestAnalysis) : null;
 
+  const isPrivileged = ['researcher', 'practitioner', 'admin'].includes(user?.role);
+
   return (
     <div className="page-container" id="page-home">
       {/* Compact & Elegant Hero Section */}
@@ -143,25 +145,50 @@ export default function Home({ onNavigate, onViewReport }) {
         <div className="home-hero-content">
           <h1 className="home-hero-title">Hello, {firstName}</h1>
           <p className="home-hero-subtitle">
-            Understand your skin health with AI-assisted lesion analysis.
+            {isPrivileged
+              ? 'Clinical AI-assisted lesion analysis and longitudinal patient tracking.'
+              : 'Review your skin health records and diagnostic assessment history.'}
           </p>
           <div className="home-hero-actions">
-            <button
-              type="button"
-              className="btn btn-primary"
-              onClick={() => handleNav('new-check')}
-            >
-              <i className="fas fa-camera" aria-hidden="true"></i>
-              <span>Start a Skin Check</span>
-            </button>
-            <button
-              type="button"
-              className="btn btn-secondary"
-              onClick={() => handleNav(latestAnalysis ? 'results' : 'history')}
-            >
-              <i className="fas fa-clipboard-list" aria-hidden="true"></i>
-              <span>View Previous Results</span>
-            </button>
+            {isPrivileged ? (
+              <>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={() => handleNav('upload')}
+                >
+                  <i className="fas fa-cloud-arrow-up" aria-hidden="true"></i>
+                  <span>Upload for Patient</span>
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => navigate('/patients')}
+                >
+                  <i className="fas fa-hospital-user" aria-hidden="true"></i>
+                  <span>Patient Records</span>
+                </button>
+              </>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={() => handleNav(latestAnalysis ? 'results' : 'history')}
+                >
+                  <i className="fas fa-clipboard-check" aria-hidden="true"></i>
+                  <span>View My Results</span>
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => handleNav('history')}
+                >
+                  <i className="fas fa-history" aria-hidden="true"></i>
+                  <span>Check History</span>
+                </button>
+              </>
+            )}
           </div>
         </div>
       </section>

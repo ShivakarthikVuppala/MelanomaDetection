@@ -211,6 +211,9 @@ class AnalysisResponse(BaseModel):
     retryable: bool = False
     execution_trace: List[Dict[str, Any]] = Field(default_factory=list)
     clinical_questions: List[Dict[str, str]] = Field(default_factory=list)
+    # Patient context — populated only for researcher/practitioner uploads
+    patient_id: Optional[str] = None
+    patient_name: Optional[str] = None
 
 
 class AnalysisListItem(BaseModel):
@@ -221,6 +224,21 @@ class AnalysisListItem(BaseModel):
     confidence: float
     timestamp: datetime
     status: str
+    # Patient context — populated only for researcher/practitioner uploads
+    patient_id: Optional[str] = None
+    patient_name: Optional[str] = None
+
+
+class PatientSummary(BaseModel):
+    """Compact patient record for the practitioner's patient list."""
+    patient_id: str
+    patient_name: str
+    upload_count: int
+    last_upload: datetime
+    last_prediction: Optional[str] = None
+    last_confidence: Optional[float] = None
+    status: Optional[str] = None
+    is_running: bool = False
 
 
 class PreprocessResponse(BaseModel):

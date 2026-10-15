@@ -32,10 +32,10 @@ if env_path.exists():
                 key, val = line.split("=", 1)
                 os.environ[key.strip()] = val.strip()
 
-from .auth import router as auth_router, get_current_user
+from .auth import router as auth_router, get_current_user, PRIVILEGED_ROLES
 from .admin import router as admin_router
 from .schemas import (
-    AnalysisResponse, AnalysisListItem, PhaseStatus,
+    AnalysisResponse, AnalysisListItem, PatientSummary, PhaseStatus,
     DiagnosisResultOut, DiagnosisInfoOut, FeatureScoreOut,
     SegmentationInfoOut, ExplainabilityInfoOut, PreprocessingInfoOut,
     PipelineInfoOut, MetadataInfoOut, MedicalEvidenceOut,
@@ -599,6 +599,8 @@ async def list_analyses(current_user: dict = Depends(get_current_user)):
                         confidence=confidence,
                         timestamp=ts,
                         status=status,
+                        patient_id=doc.get("patient_id"),
+                        patient_name=doc.get("patient_name"),
                     ))
                 except Exception as e:
                     logger.warning(f"Skipping document {doc.get('analysis_id')} due to parse error: {e}")
@@ -649,6 +651,8 @@ async def list_analyses(current_user: dict = Depends(get_current_user)):
                 confidence=confidence,
                 timestamp=ts,
                 status=status,
+                patient_id=getattr(analysis, "patient_id", None),
+                patient_name=getattr(analysis, "patient_name", None),
             ))
     return sorted(items, key=lambda item: item.timestamp, reverse=True)
 
@@ -834,7 +838,12 @@ async def preprocess_image(file: UploadFile = File(...)):
     )
 
 
-async def _save_analysis(analysis: AnalysisResponse, user_id: str = ""):
+async def _save_analysis(
+    analysis: AnalysisResponse,
+    user_id: str = "",
+    patient_id: Optional[str] = None,
+    patient_name: Optional[str] = None,
+):
     analyses_store[analysis.analysis_id] = analysis
     db = get_db()
     if db is not None:
@@ -842,6 +851,10 @@ async def _save_analysis(analysis: AnalysisResponse, user_id: str = ""):
             doc = analysis.model_dump(mode='json')
             if user_id:
                 doc["user_id"] = user_id
+            if patient_id:
+                doc["patient_id"] = patient_id.strip()
+            if patient_name:
+                doc["patient_name"] = patient_name.strip()
             await db["analyses"].update_one(
                 {"analysis_id": analysis.analysis_id},
                 {"$set": doc},
@@ -859,12 +872,43 @@ async def analyze_image(
     scale_reference_key: Optional[str] = Form(None),
     clinical_context_json: Optional[str] = Form(None),
     historical_analysis_ids: Optional[str] = Form(None),
+    # Patient context — required for researcher/practitioner, ignored for regular users
+    patient_id: Optional[str] = Form(None),
+    patient_name: Optional[str] = Form(None),
     current_user: dict = Depends(get_current_user),
 ):
     """Run the canonical Supervisor Agent workflow for one image/case.
     Requires a valid JWT — the authenticated user's ID is attached to the analysis.
+    Privileged users (researchers/practitioners) must supply patient_id and patient_name.
+    For non-test privileged users, the patient's full prior history is automatically
+    considered when calculating evolution across visits.
     """
     _caller_user_id = str(current_user.get("id") or current_user.get("_id", ""))
+    _caller_role = current_user.get("role", "user")
+    _is_privileged = _caller_role in PRIVILEGED_ROLES
+    _is_test_account = bool(current_user.get("is_test_account", False))
+
+    # Enforce role: only researchers, medical practitioners, and admins can upload images
+    if not _is_privileged:
+        file_path = UPLOADS_DIR / "temp"
+        raise HTTPException(status_code=403, detail={
+            "error_code": "access_denied",
+            "message": "Only researchers and medical practitioners can upload images.",
+        })
+
+    # Enforce patient context for non-test privileged users
+    if not _is_test_account:
+        if not patient_id or not patient_id.strip():
+            raise HTTPException(status_code=422, detail={
+                "error_code": "patient_id_required",
+                "message": "Researchers and practitioners must provide a patient ID.",
+            })
+        if not patient_name or not patient_name.strip():
+            raise HTTPException(status_code=422, detail={
+                "error_code": "patient_name_required",
+                "message": "Researchers and practitioners must provide a patient name.",
+            })
+
     analysis_id = str(uuid.uuid4())[:8]
     extension = Path(file.filename or "").suffix.lower()
     if file.content_type not in ALLOWED_MIME_TYPES or extension not in ALLOWED_EXTENSIONS:
@@ -895,6 +939,34 @@ async def analyze_image(
         })
 
     historical_image_paths = []
+
+    # Auto-inject patient history for privileged, non-test accounts
+    # Every previous upload for this patient is used as a longitudinal baseline.
+    if _is_privileged and not _is_test_account and patient_id and patient_id.strip():
+        db = get_db()
+        if db is not None:
+            try:
+                cursor = db["analyses"].find(
+                    {
+                        "user_id": _caller_user_id,
+                        "patient_id": patient_id.strip(),
+                        "status": {"$nin": ["failed", "error", "image_quality_insufficient"]},
+                    }
+                ).sort("_id", 1)  # oldest first for chronological evolution
+                async for hist_doc in cursor:
+                    hist_aid = hist_doc.get("analysis_id", "")
+                    if hist_aid:
+                        hist_path = UPLOADS_DIR / f"{hist_aid}.png"
+                        if hist_path.exists():
+                            historical_image_paths.append(str(hist_path))
+                logger.info(
+                    f"Auto-injected {len(historical_image_paths)} historical images "
+                    f"for patient {patient_id} (user {_caller_user_id})"
+                )
+            except Exception as hist_err:
+                logger.warning(f"Could not load patient history for evolution: {hist_err}")
+
+    # Process manually uploaded historical files
     for idx, hfile in enumerate(historical_files or []):
         if not hfile.filename: continue
         hfile_path = UPLOADS_DIR / f"{analysis_id}_hist_{idx}.png"
@@ -909,6 +981,7 @@ async def analyze_image(
         except Exception:
             logger.warning(f"Failed to process historical image {idx}")
 
+    # Process manually specified historical analysis IDs
     if historical_analysis_ids:
         try:
             hist_ids = json.loads(historical_analysis_ids)
@@ -920,6 +993,10 @@ async def analyze_image(
         except Exception as e:
             logger.warning(f"Failed to parse historical_analysis_ids: {e}")
 
+    # For test accounts: evolution calculations do NOT consider previous results as parameters
+    if _is_test_account:
+        historical_image_paths = []
+        logger.info("Test account upload: prior results excluded from evolution calculations")
 
     if not _models_available():
         file_path.unlink(missing_ok=True)
@@ -929,12 +1006,41 @@ async def analyze_image(
         })
 
     original_image_url = f"/static/uploads/{file_path.name}"
+
+    # Record initial running status in MongoDB so patient records can show it in progress
+    if _is_privileged and patient_id and patient_id.strip():
+        db = get_db()
+        if db is not None:
+            try:
+                await db["analyses"].update_one(
+                    {"analysis_id": analysis_id},
+                    {"$set": {
+                        "analysis_id": analysis_id,
+                        "user_id": _caller_user_id,
+                        "patient_id": patient_id.strip(),
+                        "patient_name": (patient_name or "").strip(),
+                        "status": "running",
+                        "original_image_url": original_image_url,
+                        "created_at": datetime.now(timezone.utc).isoformat(),
+                        "diagnosis": {
+                            "diagnosis": {"prediction": "Still Running...", "confidence": None},
+                            "metadata": {
+                                "timestamp": datetime.now(timezone.utc).isoformat(),
+                                "image_id": file.filename or analysis_id,
+                            },
+                        },
+                    }},
+                    upsert=True,
+                )
+            except Exception as e:
+                logger.warning(f"Could not record running status for {analysis_id}: {e}")
     try:
         clinical_context = json.loads(clinical_context_json) if clinical_context_json else None
         if clinical_context is not None and not isinstance(clinical_context, dict):
             raise ValueError
     except (json.JSONDecodeError, ValueError):
         raise HTTPException(status_code=422, detail="clinical_context_json must be a JSON object")
+
     try:
         state = await run_in_threadpool(
             _get_supervisor().run,
@@ -966,7 +1072,226 @@ async def analyze_image(
             retryable=True,
         )
 
-    await _save_analysis(analysis, user_id=_caller_user_id)
+    # If analysis failed, do NOT show it in patient records: remove running stub
+    if analysis.status in ("failed", "error", "image_quality_insufficient"):
+        db = get_db()
+        if db is not None:
+            try:
+                await db["analyses"].delete_one({"analysis_id": analysis_id})
+            except Exception:
+                pass
+        return analysis
+
+    # Attach patient metadata to the response object so it is persisted
+    if _is_privileged and patient_id and patient_id.strip():
+        analysis.patient_id = patient_id.strip()
+        analysis.patient_name = (patient_name or "").strip() or None
+
+    await _save_analysis(
+        analysis,
+        user_id=_caller_user_id,
+        patient_id=patient_id,
+        patient_name=patient_name,
+    )
     return analysis
+
+
+# ---------------------------------------------------------------------------
+# Patient-scoped endpoints (researcher / practitioner only)
+# ---------------------------------------------------------------------------
+
+@app.get("/api/patients/{patient_id}/lookup")
+async def lookup_patient(
+    patient_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    """Lookup existing patient name by ID for doctor/practitioner auto-fill."""
+    _caller_role = current_user.get("role", "user")
+    if _caller_role not in PRIVILEGED_ROLES:
+        raise HTTPException(status_code=403, detail="Forbidden: privileged access required.")
+
+    user_id = str(current_user.get("id") or current_user.get("_id", ""))
+    db = get_db()
+    if db is None:
+        raise HTTPException(status_code=503, detail="Database unavailable.")
+
+    clean_id = patient_id.strip()
+    if not clean_id:
+        return {"found": False, "patient_id": clean_id, "patient_name": ""}
+
+    doc = await db["analyses"].find_one(
+        {
+            "user_id": user_id,
+            "patient_id": clean_id,
+            "patient_name": {"$exists": True, "$nin": [None, ""]},
+            "status": {"$nin": ["failed", "error", "image_quality_insufficient"]},
+        },
+        sort=[("_id", -1)],
+    )
+
+    if doc and doc.get("patient_name"):
+        return {
+            "found": True,
+            "patient_id": clean_id,
+            "patient_name": doc["patient_name"],
+        }
+
+    return {"found": False, "patient_id": clean_id, "patient_name": ""}
+
+
+@app.get("/api/patients", response_model=list[PatientSummary])
+async def list_patients(current_user: dict = Depends(get_current_user)):
+    """Return a deduplicated list of patients uploaded by this practitioner/researcher."""
+    _caller_role = current_user.get("role", "user")
+    if _caller_role not in PRIVILEGED_ROLES:
+        raise HTTPException(status_code=403, detail="Forbidden: privileged access required.")
+
+    user_id = str(current_user.get("id") or current_user.get("_id", ""))
+    db = get_db()
+    if db is None:
+        raise HTTPException(status_code=503, detail="Database unavailable.")
+
+    # Aggregate: group by patient_id, collect latest upload info
+    pipeline = [
+        {"$match": {"user_id": user_id, "patient_id": {"$exists": True, "$ne": None}, "status": {"$nin": ["failed", "error", "image_quality_insufficient"]}}},
+        {"$sort": {"_id": -1}},
+        {"$group": {
+            "_id": "$patient_id",
+            "patient_name": {"$first": "$patient_name"},
+            "upload_count": {"$sum": 1},
+            "last_upload_doc": {"$first": "$$ROOT"},
+        }},
+        {"$sort": {"last_upload_doc._id": -1}},
+    ]
+
+    patients: list[PatientSummary] = []
+    try:
+        async for grp in db["analyses"].aggregate(pipeline):
+            doc = grp.get("last_upload_doc", {})
+            diag_meta = (doc.get("diagnosis") or {}).get("metadata") or {}
+            diag_info = (doc.get("diagnosis") or {}).get("diagnosis") or {}
+
+            raw_ts = diag_meta.get("timestamp")
+            ts = None
+            if isinstance(raw_ts, str):
+                try:
+                    ts = datetime.fromisoformat(raw_ts)
+                except Exception:
+                    pass
+            elif isinstance(raw_ts, datetime):
+                ts = raw_ts
+            if ts is None:
+                if "_id" in doc and hasattr(doc["_id"], "generation_time"):
+                    ts = doc["_id"].generation_time
+                else:
+                    ts = datetime.now(timezone.utc)
+
+            raw_conf = diag_info.get("confidence", 0.0)
+            try:
+                conf = float(raw_conf) if raw_conf is not None else None
+            except (ValueError, TypeError):
+                conf = None
+
+            doc_status = doc.get("status") or "completed"
+            is_running = (doc_status == "running")
+            pred = "Still Running..." if is_running else diag_info.get("prediction")
+
+            patients.append(PatientSummary(
+                patient_id=grp["_id"],
+                patient_name=grp.get("patient_name") or "",
+                upload_count=grp.get("upload_count", 1),
+                last_upload=ts,
+                last_prediction=pred,
+                last_confidence=conf if not is_running else None,
+                status=doc_status,
+                is_running=is_running,
+            ))
+    except Exception as e:
+        logger.error(f"Error aggregating patient list: {e}")
+        raise HTTPException(status_code=500, detail="Could not retrieve patient list.")
+
+    return patients
+
+
+@app.get("/api/patients/{patient_id}/history", response_model=list[AnalysisListItem])
+async def get_patient_history(
+    patient_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    """Return all analyses for a specific patient, oldest-first for timeline display.
+    Only the practitioner/researcher who uploaded the analyses can access them.
+    """
+    _caller_role = current_user.get("role", "user")
+    if _caller_role not in PRIVILEGED_ROLES:
+        raise HTTPException(status_code=403, detail="Forbidden: privileged access required.")
+
+    user_id = str(current_user.get("id") or current_user.get("_id", ""))
+    db = get_db()
+    if db is None:
+        raise HTTPException(status_code=503, detail="Database unavailable.")
+
+    items: list[AnalysisListItem] = []
+    try:
+        cursor = db["analyses"].find(
+            {"user_id": user_id, "patient_id": patient_id, "status": {"$nin": ["failed", "error", "image_quality_insufficient"]}}
+        ).sort("_id", 1)  # chronological order for evolution timeline
+        async for doc in cursor:
+            try:
+                diagnosis = doc.get("diagnosis") or {}
+                diag_meta = diagnosis.get("metadata") or {}
+                diag_info = diagnosis.get("diagnosis") or {}
+                status = str(doc.get("status") or "completed")
+
+                orig_url = doc.get("original_image_url") or ""
+                image_name = (
+                    diag_meta.get("image_id")
+                    or (Path(orig_url).name if orig_url else None)
+                    or doc.get("analysis_id", "Unknown")
+                )
+
+                prediction = (
+                    str(diag_info["prediction"]) if diag_info.get("prediction")
+                    else status.replace("_", " ").title() if status else "Unknown"
+                )
+
+                raw_conf = diag_info.get("confidence", 0.0)
+                try:
+                    confidence = float(raw_conf) if raw_conf is not None else 0.0
+                except (ValueError, TypeError):
+                    confidence = 0.0
+
+                raw_ts = diag_meta.get("timestamp")
+                ts = None
+                if isinstance(raw_ts, str):
+                    try:
+                        ts = datetime.fromisoformat(raw_ts)
+                    except Exception:
+                        pass
+                elif isinstance(raw_ts, datetime):
+                    ts = raw_ts
+                if ts is None:
+                    if "_id" in doc and hasattr(doc["_id"], "generation_time"):
+                        ts = doc["_id"].generation_time
+                    else:
+                        ts = datetime.now(timezone.utc)
+
+                items.append(AnalysisListItem(
+                    analysis_id=doc["analysis_id"],
+                    image_name=image_name,
+                    prediction=prediction,
+                    confidence=confidence,
+                    timestamp=ts,
+                    status=status,
+                    patient_id=doc.get("patient_id"),
+                    patient_name=doc.get("patient_name"),
+                ))
+            except Exception as e:
+                logger.warning(f"Skipping doc {doc.get('analysis_id')} in patient history: {e}")
+    except Exception as e:
+        logger.error(f"Error fetching patient history for {patient_id}: {e}")
+        raise HTTPException(status_code=500, detail="Could not retrieve patient history.")
+
+    return items
+
 
 

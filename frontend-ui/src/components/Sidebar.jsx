@@ -1,6 +1,8 @@
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from './AuthContext';
 
+const PRIVILEGED_ROLES = new Set(['researcher', 'practitioner', 'admin']);
+
 const navSections = [
   {
     title: 'HOME',
@@ -11,7 +13,6 @@ const navSections = [
   {
     title: 'SKIN HEALTH',
     items: [
-      { path: '/upload', label: 'New Skin Check', icon: 'fas fa-camera', altPaths: ['/new-check'] },
       { path: '/results', label: 'My Results', icon: 'fas fa-clipboard-check', altPaths: [] },
       { path: '/history', label: 'History', icon: 'fas fa-history', altPaths: ['/reports'] },
     ],
@@ -46,6 +47,24 @@ export default function Sidebar({
     if (onCloseMobile) onCloseMobile();
   };
 
+  const isPrivileged = PRIVILEGED_ROLES.has(user?.role);
+
+  // Inject clinical tools section for privileged roles
+  const visibleSections = isPrivileged
+    ? [
+        navSections[0],
+        {
+          title: 'CLINICAL TOOLS',
+          items: [
+            { path: '/upload', label: 'Upload for Patient', icon: 'fas fa-cloud-arrow-up', altPaths: ['/new-check'] },
+            { path: '/patients', label: 'Patient Records', icon: 'fas fa-hospital-user', altPaths: [] },
+            { path: '/history', label: 'My Uploads', icon: 'fas fa-history', altPaths: ['/reports'] },
+          ],
+        },
+        navSections[2],
+      ]
+    : navSections;
+
   const isItemActive = (item) => {
     const current = location.pathname;
     if (current === item.path) return true;
@@ -79,7 +98,7 @@ export default function Sidebar({
         </div>
 
         <nav className="sidebar-nav" aria-label="Main Navigation">
-          {navSections.map((section) => (
+          {visibleSections.map((section) => (
             <div key={section.title} className="nav-section-group">
               {!collapsed && <div className="nav-section-title">{section.title}</div>}
               {section.items.map((item) => {

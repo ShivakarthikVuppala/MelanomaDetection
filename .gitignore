@@ -70,3 +70,6 @@ desktop.ini
 
 scripts
 *.json
+.agents/
+.claude/
+*.docx

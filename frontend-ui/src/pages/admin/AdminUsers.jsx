@@ -110,6 +110,7 @@ export default function AdminUsers() {
   const [roleFilter, setRoleFilter] = useState('all');
   const [userToDelete, setUserToDelete] = useState(null);
   const [deleting, setDeleting]     = useState(false);
+  const [updatingRoleId, setUpdatingRoleId] = useState(null);
   const [toast, setToast]           = useState(null);
 
   const showToast = (msg, type = 'success') => setToast({ msg, type });
@@ -124,6 +125,25 @@ export default function AdminUsers() {
   }, [token]);
 
   useEffect(fetchUsers, [fetchUsers]);
+
+  const handleRoleChange = async (user, role) => {
+    if (role === user.role) return;
+    setUpdatingRoleId(user.id);
+    try {
+      const res = await fetch(`/api/admin/users/${user.id}/role`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ role }),
+      });
+      if (!res.ok) { const b = await res.json(); throw new Error(b.detail || 'Role update failed'); }
+      showToast(`Role updated to ${role}.`, 'success');
+      fetchUsers();
+    } catch (err) {
+      showToast(err.message, 'error');
+    } finally {
+      setUpdatingRoleId(null);
+    }
+  };
 
   const handleDelete = async () => {
     if (!userToDelete) return;
@@ -183,6 +203,8 @@ export default function AdminUsers() {
           style={{ ...inputBase, padding: '10px 14px', cursor: 'pointer' }}>
           <option value="all">All Roles</option>
           <option value="user">Users</option>
+          <option value="practitioner">Practitioners</option>
+          <option value="researcher">Researchers</option>
           <option value="admin">Admins</option>
         </select>
         <button onClick={fetchUsers} style={{
@@ -245,18 +267,31 @@ export default function AdminUsers() {
                     </td>
                     <td style={{ padding: '14px 16px' }}>
                       {u.role !== 'admin' && (
-                        <button onClick={() => setUserToDelete(u)} style={{
-                          background: 'none', border: '1px solid #fecaca',
-                          borderRadius: '8px', padding: '6px 14px',
-                          color: '#dc2626', fontSize: '13px', fontWeight: 600,
-                          cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '6px',
-                          fontFamily: FONT,
-                        }}
-                          onMouseEnter={e => e.currentTarget.style.background = '#fef2f2'}
-                          onMouseLeave={e => e.currentTarget.style.background = 'none'}
-                        >
-                          <i className="fas fa-trash-alt" /> Delete
-                        </button>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                          <select
+                            value={u.role}
+                            disabled={updatingRoleId === u.id}
+                            onChange={e => handleRoleChange(u, e.target.value)}
+                            title="Change role"
+                            style={{ ...inputBase, padding: '6px 10px', fontSize: '13px', cursor: 'pointer' }}
+                          >
+                            <option value="user">User</option>
+                            <option value="practitioner">Practitioner</option>
+                            <option value="researcher">Researcher</option>
+                          </select>
+                          <button onClick={() => setUserToDelete(u)} style={{
+                            background: 'none', border: '1px solid #fecaca',
+                            borderRadius: '8px', padding: '6px 14px',
+                            color: '#dc2626', fontSize: '13px', fontWeight: 600,
+                            cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '6px',
+                            fontFamily: FONT,
+                          }}
+                            onMouseEnter={e => e.currentTarget.style.background = '#fef2f2'}
+                            onMouseLeave={e => e.currentTarget.style.background = 'none'}
+                          >
+                            <i className="fas fa-trash-alt" /> Delete
+                          </button>
+                        </div>
                       )}
                     </td>
                   </tr>

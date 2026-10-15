@@ -32,6 +32,13 @@ AUTH_SECRET_KEY = os.getenv("AUTH_SECRET_KEY", secrets.token_hex(32))
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRY_HOURS = 24
 
+# Roles that can upload on behalf of patients
+PRIVILEGED_ROLES = {"researcher", "practitioner", "admin"}
+
+# Roles a user is allowed to pick for themselves at signup.
+# 'admin' is intentionally excluded — it can only be seeded or granted server-side.
+SELF_SIGNUP_ROLES = {"user", "practitioner", "researcher"}
+
 # ---------------------------------------------------------------------------
 # Lazy imports — keep startup fast
 # ---------------------------------------------------------------------------
@@ -101,26 +108,50 @@ async def seed_admin():
     # ── Seed admin user ───────────────────────────────────────────────────────
     admin_email = os.getenv("ADMIN_EMAIL", "").strip().lower()
     admin_pass  = os.getenv("ADMIN_INITIAL_PASSWORD", "")
-    if not (admin_email and admin_pass):
-        return
+    if admin_email and admin_pass:
+        existing = await db["users"].find_one({"email": admin_email})
+        if not existing:
+            await db["users"].insert_one({
+                "first_name": "System",
+                "last_name":  "Administrator",
+                "phone":      "",
+                "email":      admin_email,
+                "password_hash": _hash_password(admin_pass),
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "role":       "admin",
+            })
+            logger.info(f"Seeded admin user: {admin_email}")
+        else:
+            # Ensure role is always 'admin'
+            await db["users"].update_one(
+                {"email": admin_email}, {"$set": {"role": "admin"}}
+            )
 
-    existing = await db["users"].find_one({"email": admin_email})
-    if not existing:
-        await db["users"].insert_one({
-            "first_name": "System",
-            "last_name":  "Administrator",
-            "phone":      "",
-            "email":      admin_email,
-            "password_hash": _hash_password(admin_pass),
-            "created_at": datetime.now(timezone.utc).isoformat(),
-            "role":       "admin",
-        })
-        logger.info(f"Seeded admin user: {admin_email}")
-    else:
-        # Ensure role is always 'admin'
-        await db["users"].update_one(
-            {"email": admin_email}, {"$set": {"role": "admin"}}
-        )
+    # ── Seed test account ────────────────────────────────────────────────────
+    # A test account works exactly like a practitioner but evolution calculations
+    # ignore prior uploads (no longitudinal baseline injected into the pipeline).
+    test_email = os.getenv("TEST_ACCOUNT_EMAIL", "").strip().lower()
+    test_pass  = os.getenv("TEST_ACCOUNT_PASSWORD", "")
+    if test_email and test_pass:
+        existing_test = await db["users"].find_one({"email": test_email})
+        if not existing_test:
+            await db["users"].insert_one({
+                "first_name": "Test",
+                "last_name":  "Account",
+                "phone":      "",
+                "email":      test_email,
+                "password_hash": _hash_password(test_pass),
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "role":       "practitioner",
+                "is_test_account": True,
+            })
+            logger.info(f"Seeded test account: {test_email}")
+        else:
+            # Keep the is_test_account flag in sync
+            await db["users"].update_one(
+                {"email": test_email},
+                {"$set": {"role": "practitioner", "is_test_account": True}},
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -132,6 +163,7 @@ class SignupRequest(BaseModel):
     phone:      str = Field(..., min_length=1, max_length=30)
     email:      str = Field(..., min_length=1, max_length=255)
     password:   str = Field(..., min_length=6, max_length=128)
+    role:       str = Field(default="user", max_length=30)
 
 
 class LoginRequest(BaseModel):
@@ -163,6 +195,7 @@ class UserOut(BaseModel):
     email:      str
     created_at: str
     role:       str
+    is_test_account: bool = False
 
 
 class AuthResponse(BaseModel):
@@ -229,6 +262,16 @@ async def get_admin_user(current_user: dict = Depends(get_current_user)) -> dict
     """Ensure the current user has the admin role."""
     if current_user.get("role") != "admin":
         raise HTTPException(status_code=403, detail="Forbidden: Admin access required.")
+    return current_user
+
+
+async def get_privileged_user(current_user: dict = Depends(get_current_user)) -> dict:
+    """Ensure the current user has a privileged role (researcher, practitioner, admin)."""
+    if current_user.get("role") not in PRIVILEGED_ROLES:
+        raise HTTPException(
+            status_code=403,
+            detail="Forbidden: Only researchers and medical practitioners can perform this action.",
+        )
     return current_user
 
 
@@ -359,6 +402,10 @@ async def signup(body: SignupRequest):
     email = _validate_email(body.email)
     phone = _validate_phone(body.phone)
 
+    role = (body.role or "user").strip().lower()
+    if role not in SELF_SIGNUP_ROLES:
+        raise HTTPException(status_code=422, detail="Please select a valid account type.")
+
     db = get_db()
     if db is None:
         raise HTTPException(status_code=503, detail="Database unavailable.")
@@ -387,6 +434,7 @@ async def signup(body: SignupRequest):
             "expires_at":    expires_at.isoformat(),
             "expires_at_dt": expires_at,     # datetime for TTL index
             "attempts":      0,
+            "role":          role,
         }},
         upsert=True,
     )
@@ -441,7 +489,7 @@ async def verify_email(body: VerifyEmailRequest):
         "email":         email,
         "password_hash": pending["password_hash"],
         "created_at":    datetime.now(timezone.utc).isoformat(),
-        "role":          "user",
+        "role":          pending.get("role", "user"),
     })
     await db["pending_registrations"].delete_one({"email": email})
 
@@ -528,6 +576,7 @@ async def login(body: LoginRequest):
             email=row["email"],
             created_at=row["created_at"],
             role=row.get("role", "user"),
+            is_test_account=bool(row.get("is_test_account", False)),
         ),
     )
 
@@ -543,6 +592,7 @@ async def get_me(current_user: dict = Depends(get_current_user)):
         email=current_user["email"],
         created_at=current_user["created_at"],
         role=current_user.get("role", "user"),
+        is_test_account=bool(current_user.get("is_test_account", False)),
     )
 
 
@@ -600,6 +650,7 @@ async def update_me(
         email=row["email"],
         created_at=row["created_at"],
         role=row.get("role", "user"),
+        is_test_account=bool(row.get("is_test_account", False)),
     )
 
 

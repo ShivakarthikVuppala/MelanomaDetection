@@ -4,6 +4,8 @@ import { useToast } from '../components/Toast';
 import { useAuth } from '../components/AuthContext';
 import { useNotification } from '../components/NotificationContext';
 
+const PRIVILEGED_ROLES = new Set(['researcher', 'practitioner', 'admin']);
+
 const MAX_BYTES = 10 * 1024 * 1024;
 const MAX_MB = 10;
 const TYPES = new Set(['image/jpeg', 'image/jpg', 'image/png', 'image/webp']);
@@ -54,13 +56,84 @@ function decodeImage(file) {
 
 export default function Upload({ onAnalysisComplete, onNavigate }) {
   const showToast = useToast();
-  const { token } = useAuth();
+  const { token, user } = useAuth();
   const { startReportRunning, setReportCompleted, setReportFailed } = useNotification();
   const navigate = useNavigate();
   const inputRef = useRef(null);
 
+  const isPrivileged = PRIVILEGED_ROLES.has(user?.role);
+  const isTestAccount = Boolean(user?.is_test_account);
+
   // Gate: user must acknowledge instructions before they can upload
   const [instructionsAcknowledged, setInstructionsAcknowledged] = useState(false);
+
+  // Patient fields — only used for privileged roles
+  const [patientId, setPatientId] = useState('');
+  const [patientName, setPatientName] = useState('');
+  const [patientError, setPatientError] = useState(null);
+  const [existingPatients, setExistingPatients] = useState([]);
+  const [patientAutofilled, setPatientAutofilled] = useState(false);
+
+  // Load practitioner's existing patients for instant name auto-fill
+  useEffect(() => {
+    if (token && isPrivileged) {
+      fetch('/api/patients', { headers: { Authorization: `Bearer ${token}` } })
+        .then((res) => (res.ok ? res.json() : []))
+        .then((data) => {
+          if (Array.isArray(data)) {
+            setExistingPatients(data);
+          }
+        })
+        .catch((err) => console.warn('Could not load existing patients for auto-fill', err));
+    }
+  }, [token, isPrivileged]);
+
+  // When doctor types or selects a patient ID, auto-fill the full name
+  const handlePatientIdChange = (rawId) => {
+    setPatientId(rawId);
+    setPatientError(null);
+    const trimmed = rawId.trim().toLowerCase();
+    if (!trimmed) {
+      setPatientAutofilled(false);
+      return;
+    }
+    const matched = existingPatients.find(
+      (p) => p.patient_id?.toLowerCase() === trimmed
+    );
+    if (matched && matched.patient_name) {
+      setPatientName(matched.patient_name);
+      setPatientAutofilled(true);
+    } else {
+      setPatientAutofilled(false);
+    }
+  };
+
+  // On blur, query remote lookup endpoint if not already matched
+  const handlePatientIdBlur = async () => {
+    const trimmed = patientId.trim();
+    if (!trimmed || !token) return;
+    try {
+      const res = await fetch(`/api/patients/${encodeURIComponent(trimmed)}/lookup`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.found && data.patient_name) {
+          setPatientName(data.patient_name);
+          setPatientAutofilled(true);
+        }
+      }
+    } catch {
+      // fallback silently
+    }
+  };
+
+  const selectExistingPatient = (patient) => {
+    setPatientId(patient.patient_id);
+    setPatientName(patient.patient_name);
+    setPatientAutofilled(true);
+    setPatientError(null);
+  };
 
   const [file, setFile] = useState(null);
   const [historicalFiles, setHistoricalFiles] = useState([]);
@@ -129,10 +202,29 @@ export default function Upload({ onAnalysisComplete, onNavigate }) {
       return;
     }
 
+    // Validate patient fields for privileged users
+    if (isPrivileged && !isTestAccount) {
+      if (!patientId.trim()) {
+        setPatientError('Patient ID is required.');
+        return;
+      }
+      if (!patientName.trim()) {
+        setPatientError('Patient name is required.');
+        return;
+      }
+    }
+    setPatientError(null);
+
     setWorkflowState('analyzing');
     setCurrentStepIndex(0);
     setError(null);
-    startReportRunning();
+    startReportRunning({
+      patient_id: patientId.trim(),
+      patient_name: patientName.trim(),
+      imagePreview: preview,
+      lesionLocation: lesionLocation,
+      notes: notes,
+    });
 
     // Step progression animation timer
     let stepTimer = window.setInterval(() => {
@@ -148,6 +240,12 @@ export default function Upload({ onAnalysisComplete, onNavigate }) {
       const formData = new FormData();
       formData.append('file', file);
       formData.append('scale_method', 'auto');
+
+      // Attach patient context for privileged users
+      if (isPrivileged && patientId.trim()) {
+        formData.append('patient_id', patientId.trim());
+        formData.append('patient_name', patientName.trim());
+      }
 
       // Pass user-described observed changes as clinical context for RAG
       if (notes && notes.trim()) {
@@ -277,13 +375,44 @@ export default function Upload({ onAnalysisComplete, onNavigate }) {
 
   const riskDetails = completedAnalysis ? getRiskDetails(completedAnalysis) : null;
 
+  if (!isPrivileged) {
+    return (
+      <div className="page-container" id="page-new-check">
+        <div className="card" style={{ maxWidth: 640, margin: '48px auto', textAlign: 'center', padding: '48px 32px' }}>
+          <div style={{ fontSize: 52, color: '#f59e0b', marginBottom: 20 }}>
+            <i className="fas fa-user-lock"></i>
+          </div>
+          <h2 style={{ fontSize: 24, fontWeight: 700, marginBottom: 12 }}>Upload Access Restricted</h2>
+          <p style={{ color: 'var(--text-secondary)', lineHeight: 1.6, marginBottom: 28 }}>
+            Image upload and diagnostic assessment are restricted to medical practitioners and clinical researchers.
+            All scans must be submitted on behalf of patients with their Patient ID and name.
+          </p>
+          <div style={{ display: 'flex', gap: 12, justifyContent: 'center' }}>
+            <button type="button" className="btn btn-primary" onClick={() => navigate('/home')}>
+              <i className="fas fa-home" aria-hidden="true" style={{ marginRight: 8 }}></i>
+              Return to Home
+            </button>
+            <button type="button" className="btn btn-secondary" onClick={() => navigate('/results')}>
+              <i className="fas fa-clipboard-check" aria-hidden="true" style={{ marginRight: 8 }}></i>
+              View Results
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="page-container" id="page-new-check">
       {/* Page Header */}
       <div className="page-header-clean">
-        <h1 className="page-title-clean">Start a Skin Check</h1>
+        <h1 className="page-title-clean">
+          {isPrivileged ? 'Upload Patient Image' : 'Start a Skin Check'}
+        </h1>
         <p className="page-subtitle-clean">
-          Upload a clear image of the skin lesion you want to analyze.
+          {isPrivileged
+            ? 'Upload a dermoscopic image for a patient. Provide the patient ID and name for record-keeping and longitudinal tracking.'
+            : 'Upload a clear image of the skin lesion you want to analyze.'}
         </p>
       </div>
 
@@ -472,6 +601,108 @@ export default function Upload({ onAnalysisComplete, onNavigate }) {
                         </button>
                       </div>
                     </div>
+
+                    {/* Patient context — required for researcher/practitioner */}
+                    {isPrivileged && (
+                      <div className="upload-context-section patient-context-section">
+                        <div className="patient-context-header">
+                          <div className="patient-context-icon" aria-hidden="true">
+                            <i className="fas fa-hospital-user"></i>
+                          </div>
+                          <div>
+                            <label className="context-label" style={{ color: 'var(--primary)', marginBottom: '2px' }}>
+                              Patient Information
+                              {!isTestAccount && <span style={{ color: 'var(--danger, #e53e3e)', marginLeft: 4 }}>*</span>}
+                            </label>
+                            <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+                              {isTestAccount
+                                ? 'Optional — test account uploads are not linked to longitudinal history.'
+                                : 'Required — uploads are linked to this patient\'s history for evolution tracking.'}
+                            </div>
+                          </div>
+                        </div>
+
+                        {patientError && (
+                          <div className="upload-error-box" role="alert" style={{ marginTop: '8px' }}>
+                            <i className="fas fa-circle-exclamation text-danger" aria-hidden="true"></i>
+                            <span>{patientError}</span>
+                          </div>
+                        )}
+
+                        <div className="patient-fields-row">
+                          <div className="patient-field-group">
+                            <label className="context-label" htmlFor="upload-patient-id">
+                              Patient ID {!isTestAccount && <span style={{ color: 'var(--danger, #e53e3e)' }}>*</span>}
+                            </label>
+                            <input
+                              id="upload-patient-id"
+                              type="text"
+                              list="patient-id-suggestions"
+                              className="form-input-clean"
+                              placeholder="e.g. P-10042 or MRN-8812"
+                              value={patientId}
+                              onChange={(e) => handlePatientIdChange(e.target.value)}
+                              onBlur={handlePatientIdBlur}
+                              aria-required={!isTestAccount}
+                              autoComplete="off"
+                            />
+                            <datalist id="patient-id-suggestions">
+                              {existingPatients.map((p) => (
+                                <option key={p.patient_id} value={p.patient_id}>
+                                  {p.patient_name}
+                                </option>
+                              ))}
+                            </datalist>
+                          </div>
+                          <div className="patient-field-group">
+                            <label className="context-label" htmlFor="upload-patient-name">
+                              Patient Name {!isTestAccount && <span style={{ color: 'var(--danger, #e53e3e)' }}>*</span>}
+                            </label>
+                            <input
+                              id="upload-patient-name"
+                              type="text"
+                              className="form-input-clean"
+                              placeholder="Full name of the patient"
+                              value={patientName}
+                              onChange={(e) => {
+                                setPatientName(e.target.value);
+                                setPatientAutofilled(false);
+                              }}
+                              aria-required={!isTestAccount}
+                            />
+                          </div>
+                        </div>
+
+                        {patientAutofilled && (
+                          <div className="patient-autofill-hint" style={{ marginTop: '8px', fontSize: '13px', color: '#10b981', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                            <i className="fas fa-check-circle" aria-hidden="true"></i>
+                            <span>Patient record found: <strong>{patientName}</strong> (name automatically filled)</span>
+                          </div>
+                        )}
+
+                        {existingPatients.length > 0 && (
+                          <div style={{ marginTop: '10px' }}>
+                            <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '5px' }}>
+                              Recent patients (click to auto-fill):
+                            </div>
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                              {existingPatients.slice(0, 5).map((p) => (
+                                <button
+                                  key={p.patient_id}
+                                  type="button"
+                                  className="patient-chip-btn"
+                                  onClick={() => selectExistingPatient(p)}
+                                  title={`Auto-fill ${p.patient_name} (${p.patient_id})`}
+                                >
+                                  <i className="fas fa-user-circle" aria-hidden="true"></i>
+                                  <span>{p.patient_name} ({p.patient_id})</span>
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
 
                     {/* Optional Location Context */}
                     <div className="upload-context-section">

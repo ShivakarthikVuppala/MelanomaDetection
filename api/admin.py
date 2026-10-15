@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field
 from bson.objectid import ObjectId
 
 from .db import get_db
-from .auth import get_admin_user, UserOut, _verify_password, _hash_password
+from .auth import get_admin_user, UserOut, _verify_password, _hash_password, SELF_SIGNUP_ROLES
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
@@ -22,6 +22,10 @@ router = APIRouter(prefix="/api/admin", tags=["admin"])
 class ChangePasswordRequest(BaseModel):
     current_password: str = Field(..., min_length=1)
     new_password:     str = Field(..., min_length=6, max_length=128)
+
+
+class RoleUpdateRequest(BaseModel):
+    role: str = Field(..., max_length=30)
 
 
 # ---------------------------------------------------------------------------
@@ -74,6 +78,53 @@ async def delete_user(user_id: str, admin: dict = Depends(get_admin_user)):
 
     await db["users"].delete_one({"_id": obj_id})
     return {"message": "User deleted successfully."}
+
+
+# ---------------------------------------------------------------------------
+# PUT /api/admin/users/{user_id}/role  — change a user's role
+# ---------------------------------------------------------------------------
+@router.put("/users/{user_id}/role", response_model=UserOut)
+async def set_user_role(
+    user_id: str,
+    body: RoleUpdateRequest,
+    admin: dict = Depends(get_admin_user),
+):
+    """Change a user's role. Admin only.
+
+    Assignable roles are limited to user/practitioner/researcher. Administrators
+    are not created or demoted here, mirroring the delete-user safeguard.
+    """
+    role = (body.role or "").strip().lower()
+    if role not in SELF_SIGNUP_ROLES:
+        raise HTTPException(status_code=422, detail="Invalid role. Choose user, practitioner, or researcher.")
+
+    db = get_db()
+    if db is None:
+        raise HTTPException(status_code=503, detail="Database unavailable.")
+
+    try:
+        obj_id = ObjectId(user_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid user ID.")
+
+    target = await db["users"].find_one({"_id": obj_id})
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found.")
+    if target.get("role") == "admin":
+        raise HTTPException(status_code=403, detail="Cannot change an administrator's role.")
+
+    await db["users"].update_one({"_id": obj_id}, {"$set": {"role": role}})
+    row = await db["users"].find_one({"_id": obj_id})
+    return UserOut(
+        id=str(row["_id"]),
+        first_name=row["first_name"],
+        last_name=row["last_name"],
+        phone=row.get("phone", ""),
+        email=row["email"],
+        created_at=row["created_at"],
+        role=row.get("role", "user"),
+        is_test_account=bool(row.get("is_test_account", False)),
+    )
 
 
 # ---------------------------------------------------------------------------
