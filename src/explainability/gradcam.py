@@ -28,7 +28,7 @@ from pytorch_grad_cam.utils.image import show_cam_on_image
 from pytorch_grad_cam.utils.model_targets import ClassifierOutputTarget
 
 from ..classification.model import SwinV2Classifier
-from ..data.transforms import get_classification_transforms, IMAGENET_MEAN, IMAGENET_STD
+from ..engine.transforms import get_classification_transforms, IMAGENET_MEAN, IMAGENET_STD
 
 
 class SwinGradCAM:

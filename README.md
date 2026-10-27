@@ -50,6 +50,39 @@ The Orchestrator is not a fixed phase sequence. Examples:
 
 Pixel measurements are always `{unit: "pixels", calibrated: false}`. No millimetre threshold (e.g. the ABCD "D > 6 mm" criterion) is applied without valid scale calibration.
 
+### Automatic diameter calibration
+
+Uploads use automatic calibration by default. OpenCV locates repeated dark scale
+marks on the original image, including detached strokes above or below the lesion.
+Local background subtraction exposes faint marks; aligned strokes propose ruler
+regions, and their intensity profiles provide tick centres. At least six ticks
+must fit a regular spacing, allowing occasional missing marks. Inconsistent rows,
+visible spacing distortion, and marks inside the segmented lesion are rejected.
+YOLO weights and ruler bounding-box lengths are not used for calibration.
+
+`calibration.ruler_tick_interval_mm` in `config.yaml` records the image source's
+physical interval, currently **1 mm between adjacent minor ticks**. This is a
+device/dataset setting, with no practitioner entry required. Images from devices
+with finer subdivisions need their actual interval; use `null` when it is unknown.
+A row of unlabeled lines alone cannot establish its physical units.
+
+The pixel-to-millimetre calculation is:
+
+```text
+pixels_per_mm = fitted_tick_spacing_px / ruler_tick_interval_mm
+diameter_mm   = maximum_lesion_contour_distance_px / pixels_per_mm
+area_mm2     = segmented_area_px / pixels_per_mm²
+```
+
+The segmentation mask is restored to the original image dimensions before
+measuring its maximum Feret diameter. Calibration output includes tick positions,
+fit residuals, confidence, and the configured interval. A single ruler assumes the
+lesion and reference share the same image plane. Without reliable scale evidence,
+physical measurements remain unavailable and pixel measurements are retained.
+
+Run the calibration regression tests with
+`python -m pytest tests/test_scale_calibration.py -q`.
+
 ---
 
 ## Features

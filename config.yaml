@@ -30,7 +30,11 @@ quality:
 # Optional planar reference metadata. Leave null when absent; no physical
 # scale is invented when the image has no validated reference.
 calibration:
-  # ChArUco is the preferred scale reference for physical diameter. Fill in
+  # Adjacent minor ticks on this image source are 1 mm apart. Auto calibration
+  # measures their pixel spacing on the original image; no practitioner input
+  # is needed. Set null for image sources whose physical tick interval is unknown.
+  ruler_tick_interval_mm: 1.0
+  # ChArUco takes priority when a board is configured. Fill in
   # the printed board dimensions in millimetres; leave null when absent.
   charuco_squares_x: null
   charuco_squares_y: null
@@ -41,6 +45,11 @@ calibration:
   aruco_marker_id: null
   checkerboard_inner_corners: []
   checkerboard_square_size_mm: null
+  # Hand-drawn black line reference (a single straight stroke). Set the physical
+  # length of the drawn line in millimetres; leave null to require it per request
+  # via the scale_reference_mm field. Used by scale_method "line" and as the
+  # final fallback in "auto" mode.
+  line_length_mm: null
 
 # ---------------------------------------------------------------------------
 # Module 3 — Swin Transformer V2 Classification

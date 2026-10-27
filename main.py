@@ -5,10 +5,6 @@ AI Melanoma Diagnosis Pipeline
 Entry point for running all pipeline components.
 
 Usage:
-    python main.py prepare-data       # Prepare ISIC 2019/2018 datasets
-    python main.py validate-data      # Validate dataset quality
-    python main.py train              # Train Swin V2 classifier
-    python main.py evaluate-cls       # Evaluate classifier on test set
     python main.py evaluate-seg       # Evaluate segmentation
     python main.py diagnose <image>   # Run deterministic vision tools only
     python main.py orchestrate <image># Run the canonical four-agent workflow
@@ -44,27 +40,7 @@ def main():
 
     command = sys.argv[1]
 
-    if command == "prepare-data":
-        from src.data.prepare import prepare_all
-        # Interactive prompts for paths
-        print("=== ISIC Dataset Preparation ===\n")
-        i19_img = input("Path to extracted ISIC 2019 images folder: ").strip()
-        i19_csv = input("Path to ISIC_2019_Training_GroundTruth.csv: ").strip()
-        i18_img = input("Path to extracted ISIC 2018 Task1-2 images folder: ").strip()
-        i18_masks = input("Path to extracted ISIC 2018 Task1 masks folder: ").strip()
-        prepare_all(i19_img, i19_csv, i18_img, i18_masks)
-
-    elif command == "train":
-        from src.classification.train import train_classifier
-        config = sys.argv[2] if len(sys.argv) > 2 else "config.yaml"
-        train_classifier(config)
-
-    elif command == "evaluate-cls":
-        from src.evaluation.classification_eval import run_classification_evaluation
-        config = sys.argv[2] if len(sys.argv) > 2 else "config.yaml"
-        run_classification_evaluation(config)
-
-    elif command == "evaluate-seg":
+    if command == "evaluate-seg":
         from src.evaluation.segmentation_eval import run_segmentation_evaluation
         config = sys.argv[2] if len(sys.argv) > 2 else "config.yaml"
         run_segmentation_evaluation(config)
@@ -161,27 +137,6 @@ def main():
         cam.save_visualization(
             sys.argv[2], str(_resolve(_paths.get("outputs"), "outputs") / "gradcam_samples")
         )
-
-    elif command == "validate-data":
-        from src.data.validation import (
-            validate_classification_dataset,
-            validate_segmentation_dataset,
-            save_validation_report,
-        )
-        import yaml
-        with open("config.yaml") as f:
-            config = yaml.safe_load(f)
-        paths = config["paths"]
-
-        print("Validating classification dataset...")
-        cls_report = validate_classification_dataset(paths["classification_train"])
-        save_validation_report(cls_report, "outputs/classification_validation.json")
-
-        print("\nValidating segmentation dataset...")
-        seg_report = validate_segmentation_dataset(
-            paths["segmentation_images"], paths["segmentation_masks"]
-        )
-        save_validation_report(seg_report, "outputs/segmentation_validation.json")
 
     elif command == "serve":
         import uvicorn

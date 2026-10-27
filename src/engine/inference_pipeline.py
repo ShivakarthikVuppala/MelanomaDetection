@@ -19,7 +19,7 @@ from ..classification.inference import SwinV2Predictor
 from ..segmentation.segformer_wrapper import SegFormerSegmenter
 from ..features.extractor import ABCFeatureExtractor
 from ..features.base import FeatureResult
-from ..data.preprocessing import DermoscopyPreprocessor
+from .preprocessing import DermoscopyPreprocessor
 
 
 class InferencePipeline:

@@ -152,9 +152,11 @@ class EvidenceGroundedExplanationService:
         prediction = diag.diagnosis.prediction
         confidence = diag.diagnosis.confidence
 
-        # ABCD features
+        # ABCD features (omit uncalibrated pixel diameter from clinical feature list)
         feature_lines = []
         for name, feat in diag.clinical_features.items():
+            if name == "diameter" and ("px" in str(feat.score_label).lower() or not (getattr(feat, "details", {}) or {}).get("calibrated", False)):
+                continue
             feature_lines.append(f"  - {name.capitalize()}: {feat.score_label} (score: {feat.score_numeric:.3f})")
 
         # Color details
@@ -162,11 +164,14 @@ class EvidenceGroundedExplanationService:
         derm_colors = color_meas.get("detected_derm_colors", [])
         n_clusters = color_meas.get("dominant_clusters", 0)
 
-        # Segmentation
-        seg = diag.segmentation
-        seg_info = ""
-        if seg.area_px and seg.perimeter_px:
-            seg_info = f"Lesion area: {seg.area_px:,} px, Perimeter: {seg.perimeter_px:.0f} px"
+        # Scale calibration & Physical measurements
+        sc = getattr(diag, "scale_calibration", None)
+        has_physical_scale = bool(sc and getattr(sc, "calibration_valid", False))
+        lesion = diag.measurements.get("lesion", {})
+        if has_physical_scale and lesion.get("diameter_mm"):
+            measurement_info = f"Physical Diameter: {lesion['diameter_mm']:.1f} mm (calibrated scale detected)"
+        else:
+            measurement_info = "Physical scale was NOT detected. Physical diameter is unavailable. Do NOT mention or use pixelated measurements (pixels or px) in the clinical explanation."
 
         # Grad-CAM metrics
         expl = diag.explainability
@@ -218,8 +223,8 @@ inputs.
   Dominant clusters: {n_clusters}
   Detected dermoscopic colors: {', '.join(derm_colors) if derm_colors else 'N/A'}
 
-**Segmentation:**
-  {seg_info or 'Not available'}
+**Measurement / Scale:**
+  {measurement_info}
 
 **Grad-CAM Explainability Metrics:**
   {gradcam_info}
@@ -245,8 +250,7 @@ IMPORTANT GUIDELINES:
 - Be precise with numbers — reference actual scores and metrics.
 - Use only numerical values explicitly supplied in DIAGNOSTIC DATA. Never estimate or invent a missing measurement.
 - Clearly distinguish model output, computed image measurements, retrieved evidence, and generated explanation.
-- If features contradict the classification, note the discrepancy.
-- Always include the disclaimer that this is an AI-assisted analysis, not a clinical diagnosis.
+- If physical scale was not detected, physical diameter is unavailable; do NOT mention pixel counts or pixelated dimensions in the patient explanation.
 - Keep the total response under 450 words.
 - Output ONLY the 6 numbered sections. Begin each section on its own line with its bold header exactly as specified above (e.g. "**1. WHAT THIS MEANS**"), followed by a blank line, then the section content. Do not add any preamble or closing remarks outside the 6 sections."""
 
@@ -484,16 +488,19 @@ IMPORTANT GUIDELINES:
         )
         feature_text = []
         for name, feature in diag.clinical_features.items():
+            if name == "diameter" and ("px" in str(feature.score_label).lower() or not (getattr(feature, "details", {}) or {}).get("calibrated", False)):
+                continue
             friendly_name = {"asymmetry": "shape symmetry", "border": "edge regularity", "color": "color variation"}.get(name, name)
             feature_text.append(f"The lesion's {friendly_name} was described as {feature.score_label.lower()}.")
 
         lesion = diag.measurements.get("lesion", {})
+        sc = getattr(diag, "scale_calibration", None)
+        has_physical_scale = bool(sc and getattr(sc, "calibration_valid", False))
         measurement_text = []
-        if lesion.get("diameter_px") is not None:
-            measurement_text.append(f"The estimated image diameter was {lesion['diameter_px']:,.0f} pixels.")
-        if lesion.get("area_px") is not None and lesion.get("perimeter_px") is not None:
-            measurement_text.append(f"The outlined area was {lesion['area_px']:,} pixels with a perimeter of {lesion['perimeter_px']:,.0f} pixels.")
-        measurement_text.append("These are image measurements, not millimeters; physical size requires a calibrated reference.")
+        if has_physical_scale and lesion.get("diameter_mm") is not None:
+            measurement_text.append(f"The physical diameter was measured at {lesion['diameter_mm']:.1f} mm.")
+        else:
+            measurement_text.append("Physical diameter was not calculated because no calibrated scale reference was detected in the image.")
 
         ail = getattr(diag.explainability, "attention_inside_lesion", None)
         focus_text = (

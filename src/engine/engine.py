@@ -26,11 +26,11 @@ from .diagnosis import (
 )
 from .inference_pipeline import InferencePipeline
 from .measurements import extract_lesion_measurements, refine_lesion_mask, refine_mask_with_scale
+from .preprocessing import DermoscopyPreprocessor
 from .scale_detection import ScaleDetector, ScaleCalibration
 from ..classification.inference import SwinV2Predictor
 from ..segmentation.segformer_wrapper import SegFormerSegmenter
 from ..features.extractor import ABCFeatureExtractor
-from ..data.preprocessing import DermoscopyPreprocessor
 from ..explainability.gradcam import SwinGradCAM
 
 
@@ -172,9 +172,13 @@ class CoreDiagnosisEngine:
             charuco_dictionary_id=self.config.get("calibration", {}).get("charuco_dictionary_id", 0),
             checkerboard_inner_corners=tuple(self.config.get("calibration", {}).get("checkerboard_inner_corners", [])) or None,
             checkerboard_square_size_mm=self.config.get("calibration", {}).get("checkerboard_square_size_mm"),
+            line_length_mm=self.config.get("calibration", {}).get("line_length_mm"),
+            ruler_tick_interval_mm=self.config.get("calibration", {}).get("ruler_tick_interval_mm", 1.0),
         )
         pixels_per_mm = (
-            scale_cal.pixels_per_mm if scale_cal.calibration_valid else None
+            scale_cal.pixels_per_mm
+            if (scale_cal.calibration_valid and scale_cal.pixels_per_mm and scale_cal.pixels_per_mm > 0)
+            else None
         )
 
         # Validate SegFormer output before any measurement is attempted.
@@ -279,15 +283,11 @@ class CoreDiagnosisEngine:
         # edges and printed reference marks; do not let it change the measured
         # diameter, perimeter, or physical size.
         measurement_image = raw["original_image"]
-        measurements["lesion"] = extract_lesion_measurements(measurement_image, mask)
-
-        # Re-compute lesion measurements with physical scale if available
-        if pixels_per_mm:
-            measurements["lesion"] = extract_lesion_measurements(
-                measurement_image, mask, pixels_per_mm=pixels_per_mm,
-                scale_confidence=scale_cal.confidence,
-                pixel_to_mm_homography=scale_cal.homography,
-            )
+        measurements["lesion"] = extract_lesion_measurements(
+            measurement_image, mask, pixels_per_mm=pixels_per_mm,
+            scale_confidence=scale_cal.confidence if pixels_per_mm else None,
+            pixel_to_mm_homography=scale_cal.homography if pixels_per_mm else None,
+        )
 
         # Keep the complete, machine-readable measurement contract together
         # with the lesion values.  The scale detector remains the source of
@@ -299,7 +299,7 @@ class CoreDiagnosisEngine:
             "mask_cleanup": {
                 "connected_components_before": components_before_cleanup,
                 "connected_components_after": components_after_cleanup,
-                "area_px": int((mask > 0).sum()),
+                "area_px": measurements["lesion"]["area_px"],
                 "bounding_box": measurements["lesion"].get("lesion_region", {}),
             },
             "lesion_region": measurements["lesion"].get("lesion_region", {}),
@@ -360,9 +360,17 @@ class CoreDiagnosisEngine:
             interval_residuals_px=list(scale_cal.interval_residuals_px) if scale_cal.interval_residuals_px is not None else None,
         )
 
-        # Update diameter interpretation
-        if scale_cal.calibration_valid and measurements["lesion"].get("diameter_mm") is not None:
-            d_mm = measurements["lesion"]["diameter_mm"]
+        # Update diameter feature and interpretation
+        d_px = measurements["lesion"].get("diameter_px", 0.0)
+        if scale_cal.calibration_valid and measurements["lesion"].get("diameter_mm") is not None and measurements["lesion"]["diameter_mm"] > 0:
+            d_mm = float(measurements["lesion"]["diameter_mm"])
+            norm_score = float(min(1.0, max(0.0, (d_mm - 3.0) / 7.0)))
+            clinical_features["diameter"] = FeatureScore(
+                name="diameter",
+                score_numeric=round(norm_score, 3),
+                score_label=f"{d_mm:.1f} mm",
+                details={"diameter_mm": round(d_mm, 2), "diameter_px": round(d_px, 1), "unit": "mm", "calibrated": True},
+            )
             if d_mm >= 6.0:
                 clinical_interpretations["diameter"] = (
                     f"Estimated diameter {d_mm:.1f} mm exceeds the 6 mm ABCDE "
@@ -374,9 +382,15 @@ class CoreDiagnosisEngine:
                     f"for the D-criterion. Continue monitoring for changes."
                 )
         else:
+            clinical_features["diameter"] = FeatureScore(
+                name="diameter",
+                score_numeric=0.0,
+                score_label=f"{d_px:.1f} px",
+                details={"diameter_px": round(d_px, 1), "unit": "pixels", "calibrated": False},
+            )
             clinical_interpretations["diameter"] = (
-                "Pixel diameter is available; physical measurement is unavailable "
-                f"because reference calibration is unreliable ({scale_cal.validation_reason})."
+                f"Estimated diameter is {d_px:.1f} pixels (uncalibrated; physical scale not available). "
+                "Diameter returned in pixels and excluded from fusion score."
             )
 
         warnings = []

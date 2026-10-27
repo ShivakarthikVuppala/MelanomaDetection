@@ -110,6 +110,8 @@ class OrchestratorAgent:
         for name in ("asymmetry", "border", "color", "diameter", "evolution"):
             f = features.get(name)
             if f:
+                if name == "diameter" and ("px" in str(getattr(f, "score_label", "")).lower() or not (getattr(f, "details", {}) or {}).get("calibrated", False)):
+                    continue
                 feat_summary.append(
                     f"{name.capitalize()}: {getattr(f, 'score_label', 'unknown')} "
                     f"(score: {getattr(f, 'score_numeric', 0.0):.2f})"

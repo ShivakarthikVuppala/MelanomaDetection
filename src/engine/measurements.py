@@ -276,8 +276,10 @@ def extract_lesion_measurements(
 
     Args:
         image:         RGB image array (H, W, 3).
-        mask:          Binary segmentation mask (H, W).
-        pixels_per_mm: Fallback local scale for physical measurements.
+        mask:          Binary segmentation mask, covering the full image.
+            A lower-resolution model mask is restored to the image dimensions
+            with nearest-neighbour sampling before measuring its contour.
+        pixels_per_mm: Local scale in the original image's pixel coordinates.
         pixel_to_mm_homography: Optional image-pixel-to-mm planar transform.
             When supplied, physical Feret diameter, perimeter, and area are
             computed after perspective correction rather than by dividing all
@@ -287,6 +289,10 @@ def extract_lesion_measurements(
         Dict of measurement values.
     """
     binary = (np.asarray(mask) > 0).astype(np.uint8)
+    if binary.ndim != 2:
+        raise ValueError("lesion mask must be two-dimensional")
+    if binary.shape != image.shape[:2]:
+        binary = cv2.resize(binary, (image.shape[1], image.shape[0]), interpolation=cv2.INTER_NEAREST)
     area_px = int(binary.sum())
     if area_px <= 0:
         raise ValueError("empty lesion mask")
@@ -386,7 +392,7 @@ def extract_lesion_measurements(
 
     # Physical measurements from a validated local scale when no planar
     # transform is available (e.g., a circular sticker or coin).
-    if pixels_per_mm and pixels_per_mm > 0:
+    if pixels_per_mm is not None and np.isfinite(pixels_per_mm) and pixels_per_mm > 0:
         ppm = pixels_per_mm
         result["physical_scale_available"] = True
         result["pixels_per_mm"] = round(float(ppm), 4)

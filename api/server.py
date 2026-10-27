@@ -111,7 +111,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins,
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "OPTIONS"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type", "Authorization"],
 )
 app.include_router(auth_router)
@@ -855,7 +855,7 @@ async def preprocess_image(file: UploadFile = File(...)):
     Image.fromarray(image_array).save(orig_path, format="PNG")
 
     # Run hair removal only
-    from src.data.preprocessing import DermoscopyPreprocessor
+    from src.engine.preprocessing import DermoscopyPreprocessor
     preprocessor = DermoscopyPreprocessor(
         hair_removal=True, illumination_normalization=False,
     )
@@ -1001,6 +1001,11 @@ async def analyze_image(
                 "error_code": "patient_name_required",
                 "message": "Researchers and practitioners must provide a patient name.",
             })
+    if scale_reference_mm is not None and scale_reference_mm <= 0:
+        raise HTTPException(status_code=422, detail={
+            "error_code": "invalid_scale_reference",
+            "message": "Scale reference dimension must be a positive number in millimeters.",
+        })
 
     patient_id = (patient_id or "").strip()
     patient_name = (patient_name or "").strip()
@@ -1193,6 +1198,125 @@ async def analyze_image(
         clinical_context=clinical_context,
     )
     return analysis
+
+
+# ---------------------------------------------------------------------------
+# Cancel / Delete endpoints
+# ---------------------------------------------------------------------------
+
+# In-memory cancellation signal: analysis_id -> True means "please cancel"
+_cancel_requests: Dict[str, bool] = {}
+
+
+@app.post("/api/analyses/{analysis_id}/cancel")
+async def cancel_analysis(
+    analysis_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    """Request cancellation of a running analysis.
+
+    Sets a cancellation flag that the pipeline polls.  If the analysis is
+    already finished (or not found) the call still succeeds gracefully.
+    """
+    user_id = str(current_user.get("id") or current_user.get("_id", ""))
+
+    # Verify ownership via in-memory store first, then DB
+    mem = analyses_store.get(analysis_id)
+    if mem:
+        owner = getattr(mem, "user_id", None)
+        if owner and owner != user_id:
+            raise HTTPException(status_code=404, detail={"error_code": "analysis_not_found", "message": "Analysis not found."})
+        if getattr(mem, "status", None) not in ("running", "pending"):
+            return {"cancelled": False, "message": "Analysis is not running."}
+    else:
+        db = get_db()
+        if db is not None:
+            try:
+                doc = await db["analyses"].find_one({"analysis_id": analysis_id})
+                if doc:
+                    doc_owner = str(doc.get("user_id", ""))
+                    if doc_owner and doc_owner != user_id:
+                        raise HTTPException(status_code=404, detail={"error_code": "analysis_not_found", "message": "Analysis not found."})
+                    if doc.get("status") not in ("running", "pending"):
+                        return {"cancelled": False, "message": "Analysis is not running."}
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.warning(f"DB check in cancel_analysis: {e}")
+
+    # Set cancellation flag
+    _cancel_requests[analysis_id] = True
+
+    # Update in-memory record immediately so polling clients see the change
+    if mem:
+        try:
+            mem.status = "failed"
+            mem.error_code = "cancelled"
+            mem.message = "Analysis was cancelled by the user."
+        except Exception:
+            pass
+
+    # Mark as cancelled in DB
+    db = get_db()
+    if db is not None:
+        try:
+            await db["analyses"].delete_one({"analysis_id": analysis_id})
+        except Exception as e:
+            logger.warning(f"Could not remove cancelled analysis from DB: {e}")
+
+    # Remove from in-memory store
+    analyses_store.pop(analysis_id, None)
+
+    logger.info(f"Analysis {analysis_id} cancelled by user {user_id}")
+    return {"cancelled": True, "message": "Analysis cancellation requested."}
+
+
+@app.delete("/api/analyses/{analysis_id}")
+async def delete_analysis(
+    analysis_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    """Permanently delete an analysis record (history entry).
+
+    Removes the record from MongoDB and the in-memory store.  The associated
+    upload and output files are NOT deleted (they are referenced in reports).
+    """
+    user_id = str(current_user.get("id") or current_user.get("_id", ""))
+    deleted = False
+
+    # Remove from in-memory store if present and owned
+    mem = analyses_store.get(analysis_id)
+    if mem:
+        owner = getattr(mem, "user_id", None)
+        if owner and owner != user_id:
+            raise HTTPException(status_code=404, detail={"error_code": "analysis_not_found", "message": "Analysis not found."})
+        analyses_store.pop(analysis_id, None)
+        deleted = True
+
+    # Remove from MongoDB
+    db = get_db()
+    if db is not None:
+        try:
+            # Verify ownership before deleting
+            doc = await db["analyses"].find_one({"analysis_id": analysis_id})
+            if doc:
+                doc_owner = str(doc.get("user_id", ""))
+                if doc_owner and doc_owner != user_id:
+                    raise HTTPException(status_code=404, detail={"error_code": "analysis_not_found", "message": "Analysis not found."})
+                result = await db["analyses"].delete_one({"analysis_id": analysis_id, "user_id": _user_id_filter(user_id)})
+                if result.deleted_count:
+                    deleted = True
+                    logger.info(f"Deleted analysis {analysis_id} for user {user_id}")
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"DB error in delete_analysis: {e}")
+            raise HTTPException(status_code=500, detail={"error_code": "internal_error", "message": "Could not delete the analysis."})
+
+    if not deleted:
+        raise HTTPException(status_code=404, detail={"error_code": "analysis_not_found", "message": "Analysis not found."})
+
+    return {"deleted": True, "analysis_id": analysis_id}
 
 
 # ---------------------------------------------------------------------------

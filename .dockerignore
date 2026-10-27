@@ -1,11 +1,71 @@
+# ── Virtual environments ──────────────────────────────────
 melanoma_env/
 .venv/
+
+# ── Python cache ──────────────────────────────────────────
 __pycache__/
 *.pyc
-temp_uploads/
-.env
+*.pyo
+*.pyd
+.pytest_cache/
+*.egg-info/
+
+# ── Git & IDE ─────────────────────────────────────────────
 .git/
+.gitignore
+.vscode/
+.idea/
+.agents/
+.claude/
+.gemini/
+
+# ── Secrets (injected via env_file in compose) ────────────
+.env
+
+# ── Dev / research artefacts ─────────────────────────────
+notebooks/
 PDFS/
-frontend/
 test_images/
+medical_literature/
+*.docx
+*.pptx
+
+# ── Training-only source files ───────────────────────────
+src/data/dataset.py
+src/data/prepare.py
+src/data/validation.py
+src/data/transforms.py
+src/classification/train.py
+src/classification/evaluate.py
+src/evaluation/classification_eval.py
+
+# ── Datasets (not needed at runtime) ─────────────────────
+dataset/
+data/
+
+# ── Stale model checkpoints ───────────────────────────────
+checkpoints/old_models/
+checkpoints/test.pth
+checkpoints/best_swin_checkpoint_v2.pth
+
+# ── Frontend build output (rebuilt separately) ────────────
+frontend-ui/dist/
+frontend-ui/node_modules/
+frontend-ui/.pytest_cache/
+
+# ── Runtime output dirs (written at runtime, volume mount) ─
+outputs/*
+!outputs/.keep
+uploads/*
+!uploads/.keep
+
+# ── Tests ────────────────────────────────────────────────
+tests/
+
+# ── Logs ─────────────────────────────────────────────────
 *.log
+
+# ── OS ───────────────────────────────────────────────────
+Thumbs.db
+.DS_Store
+desktop.ini

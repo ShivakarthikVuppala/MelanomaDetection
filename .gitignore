@@ -20,7 +20,7 @@ checkpoints/
 models/
 
 # ── Datasets ──────────────────────────────────────────────
-dataset/
+/dataset/
 data/
 
 # ── Qdrant local data ─────────────────────────────────────
@@ -64,7 +64,8 @@ rag_pipeline/documents_metadata.json
 test_images/
 PDFS/
 git_diff_output.txt
-tests/
+/tests
+!tests/test_scale_calibration.py
 # ── Windows system files ──────────────────────────────────
 desktop.ini
 

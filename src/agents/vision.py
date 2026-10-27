@@ -111,7 +111,7 @@ class VisionAgent:
 
         try:
             from pathlib import Path
-            from ..data.preprocessing import DermoscopyPreprocessor
+            from ..engine.preprocessing import DermoscopyPreprocessor
 
             with Image.open(state.image_path) as img:
                 img_rgb = np.asarray(img.convert("RGB"))
@@ -238,6 +238,7 @@ class VisionAgent:
             state.abcde[criterion] = ABCDEFeature(criterion, "available", result.measurements.get(key, {}), feature.score_label if feature else None)
         mm, px = state.physical_measurements["diameter"], state.pixel_measurements["diameter"]
         raw = {"pixel_diameter": px.__dict__, "physical_diameter": mm.__dict__}
-        interpretation = "Calibrated physical diameter is available." if mm.calibrated and mm.value is not None else "Physical diameter is unavailable; pixel size must not be compared with millimetre thresholds."
-        state.abcde["D"] = ABCDEFeature("D", "available", raw, interpretation, mm.reason_unavailable)
+        interpretation = "Calibrated physical diameter is available." if (mm.calibrated and mm.value is not None and mm.value > 0) else "Physical diameter is unavailable; pixel size must not be compared with millimetre thresholds."
+        d_avail = "available" if (mm.calibrated and mm.value is not None and mm.value > 0) else "unavailable"
+        state.abcde["D"] = ABCDEFeature("D", d_avail, raw, interpretation, mm.reason_unavailable)
         state.uncertainty.abcde = min(state.uncertainty.segmentation, state.uncertainty.calibration or 0.5)

@@ -1,4 +1,9 @@
-"""Reference-object detection and pixel-to-millimetre calibration."""
+"""Reference-object detection and pixel-to-millimetre calibration.
+
+Auto mode measures repeated dark ruler ticks on the original image. The
+acquisition device supplies their physical interval (1 mm for this dataset),
+so no practitioner entry or object-detector bounding box sets the scale.
+"""
 
 from dataclasses import dataclass
 from typing import Optional
@@ -7,7 +12,7 @@ import cv2
 import numpy as np
 
 from .metric_measurement import ReferenceCalibrator
-from scipy.signal import find_peaks
+from .ruler_ticks import find_tick_lattices
 
 
 KNOWN_REFERENCES = {
@@ -125,6 +130,7 @@ class ScaleDetector:
                known_diameter_mm: Optional[float] = None,
                known_object_px: Optional[float] = None,
                known_object_mm: Optional[float] = None,
+               line_length_mm: Optional[float] = None,
                reference_key: Optional[str] = None,
                lesion_mask: Optional[np.ndarray] = None,
                aruco_marker_size_mm: Optional[float] = None,
@@ -135,10 +141,11 @@ class ScaleDetector:
                charuco_marker_length_mm: Optional[float] = None,
                charuco_dictionary_id: int = 0,
                checkerboard_inner_corners: Optional[tuple[int, int]] = None,
-               checkerboard_square_size_mm: Optional[float] = None) -> ScaleCalibration:
+               checkerboard_square_size_mm: Optional[float] = None,
+               ruler_tick_interval_mm: Optional[float] = 1.0) -> ScaleCalibration:
         method = (method or "none").strip().lower()
         if method in {"none", "off", "disabled"}:
-            return ScaleCalibration(method="none", validation_reason="scale calibration disabled")
+            return ScaleCalibration(pixels_per_mm=0.0, method="none", validation_reason="scale calibration disabled; diameter (D) not calculated", calibration_valid=False)
         if method in {"coin", "sticker"}:
             method = "circle"
         requested_reference_type = None
@@ -199,28 +206,42 @@ class ScaleDetector:
                 lesion_mask=lesion_mask,
             )
         if method == "ruler":
-            return self._detect_ruler(image, known_length_mm=known_diameter_mm)
+            return self._detect_ruler(
+                image, known_length_mm=known_diameter_mm, lesion_mask=lesion_mask,
+                tick_interval_mm=ruler_tick_interval_mm,
+            )
+        if method in {"line", "scale_bar", "scale-bar", "stroke", "mark", "marker_line"}:
+            return self._detect_line(
+                image,
+                known_length_mm=known_object_mm or known_diameter_mm or line_length_mm,
+                lesion_mask=lesion_mask,
+            )
 
-        # Auto mode must not stop at an unknown circle: try the ruler as well.
-        unknown_circle = self._detect_circular(
-            image, known_diameter_mm,
-            reference_type=requested_reference_type,
-            lesion_mask=lesion_mask,
+        # Measure the actual tick interval before considering other references.
+        # A ruler bounding box has no known physical length, especially when
+        # the scale is cropped or consists only of short marks on the skin.
+        ruler = self._detect_ruler(
+            image, lesion_mask=lesion_mask, tick_interval_mm=ruler_tick_interval_mm,
         )
-        if unknown_circle.detected and unknown_circle.pixels_per_mm:
-            return unknown_circle
-        ruler = self._detect_ruler(image, known_length_mm=known_diameter_mm)
         if ruler.detected:
             return ruler
-        # An unmeasured Hough circle is not evidence that a known reference
-        # object exists.  Do not expose an arbitrary artifact/lesion candidate
-        # as the selected reference in auto mode.
+        if known_diameter_mm is not None:
+            circle = self._detect_circular(
+                image, known_diameter_mm, reference_type=requested_reference_type,
+                lesion_mask=lesion_mask,
+            )
+            if circle.calibration_valid:
+                return circle
+        known_line_mm = known_object_mm or line_length_mm
+        if known_line_mm is not None:
+            line = self._detect_line(image, known_length_mm=known_line_mm, lesion_mask=lesion_mask)
+            if line.calibration_valid:
+                return line
         return ScaleCalibration(
             method="auto",
-            reference_type="none",
             validation_reason=(
-                "no verified reference object was found; physical measurement "
-                "requires a validated object and known physical size"
+                "no reliable repeated ruler ticks or known-size reference were found; "
+                "physical diameter is unavailable"
             ),
         )
 
@@ -412,478 +433,224 @@ class ScaleDetector:
             ),
         )
 
-    def _detect_ruler_geometric(
-        self, image: np.ndarray, known_length_mm: Optional[float] = None,
-    ) -> ScaleCalibration:
-        """Detect the actual ruler plane, then fit its repeated tick lattice.
-
-        The previous implementation searched only narrow image-border strips.
-        On dermatoscope images that allowed the circular black frame/skin
-        texture to win.  This implementation first finds a long dark ruler
-        baseline anywhere in the frame, samples pixels on both sides of that
-        line, and accepts ticks only when they form a coherent lattice.
-        """
-        source = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
-        source_h, source_w = source.shape[:2]
-        scale = min(1.0, 1800.0 / max(source_h, source_w))
-        gray = cv2.resize(source, (int(round(source_w * scale)), int(round(source_h * scale))), interpolation=cv2.INTER_AREA) if scale < 1 else source
-        h, w = gray.shape[:2]
-        edges = cv2.Canny(gray, 35, 110)
-        lines = cv2.HoughLinesP(edges, 1, np.pi / 180.0, threshold=max(35, int(min(h, w) * 0.035)), minLineLength=max(80, int(max(h, w) * 0.22)), maxLineGap=max(12, int(min(h, w) * 0.012)))
-        if lines is None:
-            return ScaleCalibration(method="ruler", reference_type="ruler", validation_reason="no ruler baseline detected")
-
-        candidates = []
-        # The ruler is printed with near-black ink.  A high adaptive cutoff
-        # (the former ``max(80, p08)`` rule) turns dark skin texture into fake
-        # marks on this image, producing the 11.9 px double-edge lattice.
-        # Cap the ink cutoff so the profile remains tied to printed ruler
-        # evidence rather than the overall skin brightness.
-        dark_cutoff = max(65, min(95, int(np.percentile(gray, 8))))
-        dark = gray < dark_cutoff
-        for raw_line in lines.reshape(-1, 4):
-            x1, y1, x2, y2 = map(float, raw_line)
-            direction = np.array([x2 - x1, y2 - y1], dtype=float)
-            length = float(np.linalg.norm(direction))
-            if length < max(80, int(max(h, w) * 0.22)):
-                continue
-            tangent = direction / length
-            # Support is measured on the line itself; the true printed ruler
-            # baseline has substantially more dark pixels than skin edges.
-            samples = np.linspace(0, 1, max(50, int(length)), dtype=float)
-            xs = np.clip(np.rint(x1 + samples * direction[0]).astype(int), 0, w - 1)
-            ys = np.clip(np.rint(y1 + samples * direction[1]).astype(int), 0, h - 1)
-            support = float(dark[ys, xs].mean())
-            candidates.append((length * (0.35 + support), length, (x1, y1, x2, y2), tangent))
-        if not candidates:
-            return ScaleCalibration(method="ruler", reference_type="ruler", validation_reason="no sufficiently long ruler baseline detected")
-
-        # Deduplicate overlapping Hough segments and retain the strongest few.
-        # Prefer the longest coherent baseline.  Shorter Hough fragments can
-        # have a slightly higher dark-pixel support because they coincide with
-        # one printed mark, but they cannot establish the ruler scale.
-        candidates.sort(reverse=True, key=lambda item: (item[1], item[0]))
-        selected = []
-        for candidate in candidates:
-            _, length, line, tangent = candidate
-            midpoint = np.array([(line[0] + line[2]) / 2, (line[1] + line[3]) / 2])
-            if all(np.linalg.norm(midpoint - np.array([(s[2][0] + s[2][2]) / 2, (s[2][1] + s[2][3]) / 2])) > 0.08 * min(h, w) for s in selected):
-                selected.append(candidate)
-            if len(selected) >= 8:
-                break
-
-        best = None
-        for _, length, line, tangent in selected:
-            p0 = np.array([line[0], line[1]], dtype=float)
-            normal = np.array([-tangent[1], tangent[0]], dtype=float)
-            u = np.arange(int(round(length)) + 1, dtype=float)
-            v = np.arange(-max(8, int(round(length * 0.065))), max(8, int(round(length * 0.065))) + 1, dtype=float)
-            points = p0[None, None, :] + u[:, None, None] * tangent[None, None, :] + v[None, :, None] * normal[None, None, :]
-            xx = np.clip(np.rint(points[:, :, 0]).astype(int), 0, w - 1)
-            yy = np.clip(np.rint(points[:, :, 1]).astype(int), 0, h - 1)
-            # Ignore the baseline band itself. Ticks normally extend to one
-            # side of the ruler; combining both sides lets skin texture and
-            # the ruler label create false peaks, so select the side with the
-            # strongest regularity.
-            side_profiles = []
-            for side_sign in (-1, 1):
-                side = (v * side_sign >= 4) & (v * side_sign <= max(8, int(round(length * 0.065))))
-                candidate_profile = dark[yy[:, side], xx[:, side]].sum(axis=1).astype(np.float32)
-                candidate_profile = cv2.GaussianBlur(candidate_profile.reshape(1, -1), (1, 5), 0).ravel()
-                # A printed tick is several pixels wide at the bounded
-                # working resolution.  Enforce a separation larger than its
-                # two edges so one mark cannot become two lattice points.
-                candidate_peaks, _ = find_peaks(candidate_profile, distance=max(6, int(round(length * 0.007))), prominence=max(1.0, float(np.percentile(candidate_profile, 65) * 0.08)), height=max(1.0, float(np.percentile(candidate_profile, 45))))
-                candidate_gaps = np.diff(candidate_peaks).astype(float)
-                usable_gaps = candidate_gaps[(candidate_gaps >= 3) & (candidate_gaps <= max(30, int(length * 0.08)))]
-                if len(usable_gaps):
-                    med_gap = float(np.median(usable_gaps))
-                    regularity = int(np.sum(np.abs(usable_gaps - med_gap) <= max(1.5, med_gap * 0.20)))
-                else:
-                    regularity = 0
-                side_profiles.append((regularity, candidate_profile, candidate_peaks))
-            _, profile, peaks = max(side_profiles, key=lambda item: item[0])
-            if len(peaks) < 6:
-                continue
-            gaps = np.diff(peaks).astype(float)
-            gap_values = gaps[(gaps >= 3) & (gaps <= max(30, int(length * 0.08)))]
-            if len(gap_values) < 4:
-                continue
-            # Search the physical interval directly.  Each candidate must
-            # explain a unique, monotonic tick index; this prevents a
-            # quadratic fit from absorbing arbitrary peaks or a long gap.
-            best_inliers, best_fit, best_spacing, best_phase = [], None, None, 0.0
-            # At the bounded 1800 px working scale, two physical ruler marks
-            # closer than 4.5 px are unresolved edge structure, not separate
-            # millimetre ticks. This blocks the old double-edge failure.
-            gap_bins = np.arange(2.5, min(31.0, float(gap_values.max()) + 1.5), 0.5)
-            gap_hist, gap_edges = np.histogram(gap_values, bins=gap_bins)
-            mode_spacing = float((gap_edges[int(np.argmax(gap_hist))] + gap_edges[int(np.argmax(gap_hist)) + 1]) / 2.0)
-            lower_spacing = max(4.5, mode_spacing - 1.25)
-            upper_spacing = min(25.0, mode_spacing + 1.25)
-            for spacing_candidate in np.arange(lower_spacing, upper_spacing + 0.01, 0.25):
-                tolerance = max(1.0, spacing_candidate * 0.16)
-                for phase in np.linspace(0.0, spacing_candidate, 16, endpoint=False):
-                    indices = np.rint((peaks - phase) / spacing_candidate).astype(np.int64)
-                    chosen = []
-                    for index in np.unique(indices):
-                        members = np.where(indices == index)[0]
-                        chosen.append(members[np.argmin(np.abs(peaks[members] - (phase + index * spacing_candidate)))])
-                    chosen = np.asarray(sorted(chosen), dtype=np.int64)
-                    if len(chosen) < 6:
-                        continue
-                    lattice_index = indices[chosen].astype(float)
-                    design = np.column_stack([np.ones(len(chosen)), lattice_index, lattice_index ** 2])
-                    coeff, *_ = np.linalg.lstsq(design, peaks[chosen], rcond=None)
-                    predicted = design @ coeff
-                    residuals = np.abs(peaks[chosen] - predicted)
-                    inliers = chosen[residuals <= tolerance]
-                    if len(inliers) >= 6 and (len(inliers) > len(best_inliers) or (len(inliers) == len(best_inliers) and spacing_candidate > (best_spacing or 0))):
-                        best_inliers, best_fit, best_spacing, best_phase = inliers, coeff, float(spacing_candidate), float(phase)
-            if len(best_inliers) < 6 or best_fit is None:
-                continue
-            spacing = best_spacing
-            lattice_index = np.rint((peaks[best_inliers] - best_phase) / spacing).astype(float)
-            design = np.column_stack([np.ones(len(best_inliers)), lattice_index, lattice_index ** 2])
-            fitted = design @ best_fit
-            residual = float(np.sqrt(np.mean((peaks[best_inliers] - fitted) ** 2)))
-            score = len(best_inliers) * (1.0 - min(residual / max(spacing, 1.0), 1.0))
-            if best is None or score > best[0]:
-                best = (score, spacing, residual, p0, tangent, normal, peaks[best_inliers], xx, yy, profile)
-        if best is None:
-            return ScaleCalibration(method="ruler", reference_type="ruler", validation_reason="no coherent ruler tick lattice detected")
-
-        _, spacing, residual, p0, tangent, normal, ticks, xx, yy, profile = best
-        # A metric ruler has 1 mm minor divisions only when that convention
-        # is explicitly accepted. Unknown spacing is measured, never guessed
-        # from image resolution.
-        interval_mm = float(known_length_mm) if known_length_mm is not None else 1.0
-        axis0 = p0 / scale
-        axis1 = (p0 + tangent * (len(profile) - 1)) / scale
-        tick_points = tuple(tuple(map(float, (p0 + tangent * float(t) - normal * 2.0) / scale)) for t in ticks)
-        intervals = np.diff(ticks).astype(float)
-        interval_multipliers = np.maximum(1.0, np.rint(intervals / max(spacing, 1e-9)))
-        # Remove the quarter-pixel search-grid quantization.  Estimate the
-        # base interval from the observed intervals after accounting for
-        # legitimately missing marks.
-        spacing = float(np.median(intervals / interval_multipliers))
-        if abs(spacing - round(spacing)) <= 0.30:
-            spacing = float(round(spacing))
-        spacing_source = float(spacing / scale)
-        interval_residuals = intervals - interval_multipliers * spacing
-        # A valid calibration must explain the *individual* intervals, not
-        # merely fit a few points after assigning arbitrary large gaps to
-        # integer multiples.  Keep this tolerance below one sixth of a tick
-        # so double edges and skin-texture peaks cannot become a metric scale.
-        interval_tolerance = max(1.5, spacing * 0.15)
-        interval_coverage = float(np.mean(np.abs(interval_residuals) <= interval_tolerance)) if len(interval_residuals) else 0.0
-        interval_rms = float(np.sqrt(np.mean(interval_residuals ** 2))) if len(interval_residuals) else float("inf")
-        expected_tick_count = max(1.0, (float(ticks[-1]) - float(ticks[0])) / max(spacing, 1e-9) + 1.0)
-        tick_density = float(len(ticks) / expected_tick_count)
-        bbox_x = int(max(0, np.min([p[0] for p in tick_points]) - 20))
-        bbox_y = int(max(0, np.min([p[1] for p in tick_points]) - 40))
-        bbox_x1 = int(min(source_w, np.max([p[0] for p in tick_points]) + 40))
-        bbox_y1 = int(min(source_h, np.max([p[1] for p in tick_points]) + 40))
-        confidence = float(np.clip((len(ticks) / 30.0) * (1.0 - residual / max(spacing, 1.0)) * interval_coverage * min(1.0, tick_density / 0.75), 0.0, 0.95))
-        valid = bool(
-            len(ticks) >= 6
-            and spacing_source >= 5.0
-            and residual <= max(1.5, spacing * 0.15)
-            and interval_coverage >= 0.85
-            and interval_rms <= max(1.5, spacing * 0.15)
-            and tick_density >= 0.75
-        )
-        if not valid:
-            confidence = min(confidence, 0.49)
-        return ScaleCalibration(
-            pixels_per_mm=spacing_source / interval_mm if valid else None,
-            method="ruler", reference_type="ruler", confidence=confidence,
-            reference_length_px=spacing_source, reference_length_mm=interval_mm,
-            reference_bbox_px=(bbox_x, bbox_y, bbox_x1 - bbox_x, bbox_y1 - bbox_y),
-            orientation="horizontal" if abs(tangent[0]) >= abs(tangent[1]) else "vertical",
-            angle_degrees=float(np.degrees(np.arctan2(tangent[1], tangent[0]))),
-            interval_mm=interval_mm, tick_positions_px=tuple(float((t / scale)) for t in ticks),
-            tick_spacing_px=spacing_source, validated_tick_count=len(ticks),
-            reference_points_px=tick_points, axis_endpoints_px=(tuple(map(float, axis0)), tuple(map(float, axis1))),
-            tick_points_px=tick_points, reprojection_error_px=round(residual / max(scale, 1e-9), 4),
-            calibration_uncertainty=round(min(1.0, residual / max(spacing, 1.0)), 5),
-            interval_residuals_px=tuple(float(value / scale) for value in interval_residuals),
-            detected=True, calibration_valid=bool(valid),
-            validation_reason="valid ruler baseline and tick lattice" if valid else "ruler evidence is sparse/inconsistent; physical measurement withheld",
-            warnings=("metric interval assumed as 1 mm from ruler minor divisions" if known_length_mm is None else "",),
-        )
-
-    def _detect_ruler(
+    def _detect_line(
         self,
         image: np.ndarray,
         known_length_mm: Optional[float] = None,
+        lesion_mask: Optional[np.ndarray] = None,
     ) -> ScaleCalibration:
-        """Detect repeated ruler marks without assuming their physical spacing.
+        """Detect a single hand-drawn straight black line and measure its span.
 
-        Ruler ticks are better represented by a one-dimensional dark-pixel
-        profile than by the most common Hough-line angle: hair and glare often
-        produce more Hough lines than the ruler itself.  The profile is still
-        constrained to border regions, and requires a repeated spacing pattern.
-        When no interval is supplied, a validated metric ruler is interpreted
-        using its 1 mm minor division; the conversion is still derived from
-        the measured tick spacing in this image.
+        Dermoscopic images in this workflow often carry only a black ink
+        marking rather than a coin or a printed metric ruler.  Such a stroke
+        has no circular boundary and no repeated tick lattice, so both the
+        circle and ruler detectors reject it.  This detector instead isolates
+        near-black ink and keeps the most line-like connected component — long,
+        thin and straight — then fits its principal axis and reports the drawn
+        pixel span and endpoints.
+
+        A pixel span alone is not a scale: converting it to millimetres still
+        requires the physical length of the stroke.  When that length is not
+        supplied the stroke is reported as detected but uncalibrated, exactly
+        like a circle of unknown diameter.
         """
-        return self._detect_ruler_geometric(image, known_length_mm)
-
         gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
-        source_height, source_width = gray.shape[:2]
-        resize_scale = min(1.0, 1600.0 / max(source_height, source_width))
-        if resize_scale < 1.0:
+        source_h, source_w = gray.shape[:2]
+        scale = min(1.0, 1800.0 / max(source_h, source_w))
+        if scale < 1.0:
             gray = cv2.resize(
                 gray,
-                (max(1, int(round(source_width * resize_scale))),
-                 max(1, int(round(source_height * resize_scale)))),
+                (max(1, int(round(source_w * scale))), max(1, int(round(source_h * scale)))),
                 interpolation=cv2.INTER_AREA,
             )
-        height, width = gray.shape[:2]
-        # Use thinner border strips (1/5) to reduce hair contamination
-        strip_h = max(40, height // 5)
-        strip_w = max(40, width // 5)
-        strips = [
-            (gray[:strip_h, :], (0, 0)),
-            (gray[-strip_h:, :], (0, height - strip_h)),
-            (gray[:, :strip_w], (0, 0)),
-            (gray[:, -strip_w:], (width - strip_w, 0)),
-        ]
+        h, w = gray.shape[:2]
+        min_dim = min(h, w)
+
+        # Black marker ink is far darker than skin.  Tie the cutoff to the dark
+        # tail of the histogram but clamp it, so a dark frame does not turn the
+        # whole image into "ink" and a bright frame still finds the stroke.
+        dark_cutoff = int(np.clip(np.percentile(gray, 4), 45, 110))
+        dark = (gray < dark_cutoff).astype(np.uint8)
+        # Open removes isolated speckle and thin hair fragments; close bridges
+        # the small gaps a marker leaves where it skips over pores.
+        dark = cv2.morphologyEx(dark, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)))
+        dark = cv2.morphologyEx(dark, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)))
+
+        lesion_binary = None
+        if lesion_mask is not None:
+            mask_array = np.asarray(lesion_mask)
+            if mask_array.size and mask_array.shape != gray.shape:
+                mask_array = cv2.resize(
+                    mask_array.astype(np.uint8), (w, h), interpolation=cv2.INTER_NEAREST,
+                )
+            if mask_array.shape == gray.shape:
+                lesion_binary = (mask_array > 0).astype(np.uint8)
+
+        count, labels, stats, _ = cv2.connectedComponentsWithStats(dark, 8)
         best = None
-        for strip, (offset_x, offset_y) in strips:
-            # Suppress hairs with morphological opening (horizontal kernel)
-            # before thresholding so thin curved hairs are removed but short
-            # straight ruler ticks survive.
-            hair_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, 7))
-            cleaned = cv2.morphologyEx(strip, cv2.MORPH_OPEN, hair_kernel)
-            # Also try adaptive threshold which handles varied backgrounds
-            _, otsu_thresh = cv2.threshold(
-                cleaned, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU
+        best_score = -1.0
+        for label in range(1, count):
+            area = int(stats[label, cv2.CC_STAT_AREA])
+            if area < max(40, int(min_dim * 0.02)):
+                continue
+            ys, xs = np.where(labels == label)
+            points = np.column_stack([xs, ys]).astype(np.float32)
+            mean, eigenvectors = cv2.PCACompute(points, mean=None)
+            axis = eigenvectors[0]
+            perpendicular = eigenvectors[1]
+            projections = (points - mean[0]) @ axis
+            span = float(projections.max() - projections.min())
+            if span < max(30.0, min_dim * 0.08):
+                continue
+            # A drawn stroke is thin: its area divided by its length is the
+            # average width.  This rejects filled blobs, vignette rings and
+            # dark background regions, which are broad rather than stroke-like.
+            thickness = float(area) / max(span, 1.0)
+            if not 1.5 <= thickness <= max(12.0, min_dim * 0.04):
+                continue
+            # Straightness: the perpendicular spread about the principal axis.
+            # A straight line keeps this near the half-width; a curved hair or
+            # a blob spreads much further.
+            residual = float(np.sqrt(np.mean(((points - mean[0]) @ perpendicular) ** 2)))
+            if residual > max(3.0, thickness * 1.2):
+                continue
+
+            length_fraction = span / max(min_dim, 1)
+            straightness = 1.0 - min(residual / max(thickness, 1.0), 1.0)
+            darkness = 1.0 - min(float(gray[ys, xs].mean()) / max(dark_cutoff, 1), 1.0)
+            score = (
+                0.40 * min(length_fraction / 0.5, 1.0)
+                + 0.25 * straightness
+                + 0.20 * min(span / max(4.0 * residual, 1.0) / 20.0, 1.0)
+                + 0.15 * darkness
             )
-            adapt_thresh = cv2.adaptiveThreshold(
-                cleaned, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-                cv2.THRESH_BINARY_INV, 31, 8
-            )
-            # Combine: use whichever has less noise (fewer dark pixels)
-            otsu_count = int((otsu_thresh > 0).sum())
-            adapt_count = int((adapt_thresh > 0).sum())
-            thresholded = otsu_thresh if otsu_count <= adapt_count else adapt_thresh
-            dark = thresholded > 0
-            row_counts = dark.sum(axis=1)
-            col_counts = dark.sum(axis=0)
-            horizontal_band_y = int(np.argmax(row_counts))
-            vertical_band_x = int(np.argmax(col_counts))
-            band_half = max(12, min(50, int(round(min(strip.shape) * 0.12))))
-            profile_masks = (
-                dark[max(0, horizontal_band_y - band_half):min(strip.shape[0], horizontal_band_y + band_half + 1), :],
-                dark[:, max(0, vertical_band_x - band_half):min(strip.shape[1], vertical_band_x + band_half + 1)],
-            )
-            profile_offsets = (
-                (0, max(0, horizontal_band_y - band_half)),
-                (max(0, vertical_band_x - band_half), 0),
-            )
-            profiles = (profile_masks[0].sum(axis=0), profile_masks[1].sum(axis=1))
-            for axis, profile in enumerate(profiles):
-                profile_dark = profile_masks[axis]
-                profile_offset_x, profile_offset_y = profile_offsets[axis]
-                profile = profile.astype(np.float32)
-                if profile.size < 20 or float(profile.max()) < 4.0:
-                    continue
-                profile = cv2.GaussianBlur(profile.reshape(1, -1), (1, 5), 0).ravel() if axis == 0 else cv2.GaussianBlur(profile.reshape(-1, 1), (5, 1), 0).ravel()
-                # A ruler baseline can be dark across every column/row.  Only
-                # retain peaks that rise materially above that baseline so its
-                # two edges are not mistaken for repeated ticks.
-                peak_floor = max(5.0, float(np.percentile(profile, 75)) * 1.25)
-                # Suppress the two/three-pixel edges of one printed mark; a
-                # true adjacent ruler mark must be farther apart than that.
-                min_distance = max(5, int(round(min(height, width) * 0.003)))
-                candidates = [
-                    i for i in range(1, len(profile) - 1)
-                    if profile[i] >= peak_floor
-                    and profile[i] >= profile[i - 1]
-                    and profile[i] >= profile[i + 1]
-                ]
-                selected = []
-                for index in sorted(candidates, key=lambda i: profile[i], reverse=True):
-                    if all(abs(index - previous) >= min_distance for previous in selected):
-                        selected.append(index)
-                selected = np.asarray(sorted(selected), dtype=np.float32)
-                if selected.size < 4:
-                    continue
-                # Background hairs create isolated peaks.  Search for a
-                # contiguous run of marks before measuring spacing so distant
-                # unrelated peaks cannot inflate the variance.
-                all_spacings = np.diff(selected)
-                # Major ruler marks can be separated by several centimetres
-                # in a downsampled phone image.  Keep a generous gap limit;
-                # the spacing-consistency test below still rejects isolated
-                # background peaks.
-                run_boundaries = [0] + (np.where(all_spacings > 100.0)[0] + 1).tolist() + [selected.size]
-                best_run = None
-                for run_start, run_end in zip(run_boundaries[:-1], run_boundaries[1:]):
-                    run_positions = selected[run_start:run_end]
-                    if run_positions.size < 4:
-                        continue
-                    run_spacings = np.diff(run_positions)
-                    run_median = float(np.median(run_spacings))
-                    spacing_mad = float(np.median(np.abs(run_spacings - run_median)))
-                    spacing_tolerance = max(
-                        2.0,
-                        min(run_median * 0.25, 3.0 * 1.4826 * spacing_mad),
-                    )
-                    run_close = np.abs(run_spacings - run_median) <= spacing_tolerance
-                    run_consistency = float(run_close.mean()) * (
-                        1.0 - min(float(np.std(run_spacings[run_close])) / max(run_median, 1.0), 1.0)
-                    ) if np.any(run_close) else 0.0
-                    run_score = int(run_close.sum()) * run_consistency
-                    if best_run is None or run_score > best_run[0]:
-                        best_run = (run_score, run_positions, run_spacings, run_close, run_median, run_consistency)
-                if best_run is None:
-                    continue
-                _, selected, _, _, spacing_median, _ = best_run
-                if not 3.0 <= spacing_median <= min(100.0, max(height, width) * 0.25):
-                    continue
-                spacing_mad = float(np.median(np.abs(np.diff(selected) - spacing_median)))
-                spacing_tolerance = max(
-                    2.0,
-                    min(spacing_median * 0.25, 3.0 * 1.4826 * spacing_mad),
-                )
-                spacings = np.diff(selected)
-                close = np.abs(spacings - spacing_median) <= spacing_tolerance
-                if int(close.sum()) < 3:
-                    continue
-                consistency = float(close.mean()) * (
-                    1.0 - min(float(np.std(spacings[close])) / max(spacing_median, 1.0), 1.0)
-                )
-                span = float(selected[-1] - selected[0])
-                if consistency < 0.50 or span < max(3.0 * spacing_median, 15.0):
-                    continue
-                if axis == 0:
-                    x0, x1 = max(0, int(selected[0]) - 2), min(strip.shape[1], int(selected[-1]) + 3)
-                    ys, xs = np.where(profile_dark[:, x0:x1])
-                    bbox_work = (x0 + offset_x, int(ys.min()) + offset_y + profile_offset_y,
-                                 max(1, x1 - x0), max(1, int(ys.max() - ys.min() + 1))) if len(ys) else None
-                else:
-                    y0, y1 = max(0, int(selected[0]) - 2), min(strip.shape[0], int(selected[-1]) + 3)
-                    ys, xs = np.where(profile_dark[y0:y1, :])
-                    bbox_work = (int(xs.min()) + offset_x + profile_offset_x, y0 + offset_y,
-                                 max(1, int(xs.max() - xs.min() + 1)), max(1, y1 - y0)) if len(xs) else None
-                if bbox_work is None:
-                    continue
-                bx, by, bw, bh = bbox_work
-                long_side, short_side = max(bw, bh), min(bw, bh)
-                # Dermoscopic rulers typically sit flush against the image
-                # border.  Only reject if the ruler is too small or not
-                # elongated; do NOT reject for touching the border.
-                if (
-                    long_side < max(20, int(round(min(height, width) * 0.05)))
-                    or short_side <= 0
-                    or long_side / short_side < 2.0
-                ):
-                    continue
-                score = int(close.sum()) * consistency
-                # Fit a regular tick lattice to the inlier spacing.  The
-                # lattice gives consumers a clean, validated list even when
-                # a few individual marks are obscured by hair/glare.
-                validated_ticks = np.asarray([], dtype=np.float32)
-                for phase_source in selected:
-                    phase = float((phase_source - selected[0]) % spacing_median)
-                    first = float(selected[0] + phase)
-                    grid = first + np.arange(
-                        int(np.floor((selected[-1] - first) / spacing_median)) + 1,
-                        dtype=np.float32,
-                    ) * float(spacing_median)
-                    matched = []
-                    for grid_position in grid:
-                        if np.min(np.abs(selected - grid_position)) <= spacing_tolerance:
-                            matched.append(float(grid_position))
-                    if len(matched) > len(validated_ticks):
-                        validated_ticks = np.asarray(matched, dtype=np.float32)
-                if validated_ticks.size < 4:
-                    validated_ticks = selected.copy()
-                if best is None or score > best[0]:
-                    best = (
-                        score, spacing_median, int(close.sum()), bbox_work,
-                        consistency, axis,
-                        offset_x if axis == 0 else offset_y,
-                        validated_ticks.copy(),
-                    )
-        if best is None:
-            return ScaleCalibration(method="ruler", reference_type="ruler", validation_reason="no repeated ruler marks detected")
-        _, spacing, count, bbox_work, consistency, axis, tick_origin, selected_ticks = best
-        spacing_source = float(spacing / resize_scale)
-        tick_positions_source = tuple(
-            float((position + tick_origin) / resize_scale)
-            for position in selected_ticks
-        )
-        bbox = tuple(int(round(value / resize_scale)) for value in bbox_work)
-        bbox = (
-            max(0, bbox[0]), max(0, bbox[1]),
-            min(source_width - max(0, bbox[0]), bbox[2]),
-            min(source_height - max(0, bbox[1]), bbox[3]),
-        )
-        # A metric ruler normally has ten equally spaced minor divisions per
-        # centimetre.  The detected spacing is therefore a *measured* 1 mm
-        # interval, not a pixels-per-mm constant.  If a caller supplies a
-        # different interval (for example a 5 mm reference bar), use that
-        # explicitly instead.
-        interval_mm = float(known_length_mm) if known_length_mm is not None else 1.0
-        orientation = "horizontal" if axis == 0 else "vertical"
-        angle_degrees = 0.0 if orientation == "horizontal" else 90.0
-        # Estimate the long ruler axis locally.  Projection profiles still
-        # work for small rotations, but correcting the measured spacing by
-        # the cosine of this angle preserves physical accuracy and makes the
-        # orientation explicit to callers.
-        bx, by, bw, bh = bbox_work
-        roi = gray[max(0, by - 3):min(height, by + bh + 4), max(0, bx - 3):min(width, bx + bw + 4)]
-        edges = cv2.Canny(roi, 50, 150)
-        lines = cv2.HoughLinesP(edges, 1, np.pi / 180.0, threshold=max(10, int(min(roi.shape) * 0.15)),
-                                minLineLength=max(15, int(max(roi.shape) * 0.25)), maxLineGap=8)
-        if lines is not None:
-            line_angles = []
-            for line in np.asarray(lines).reshape(-1, 4):
-                x1, y1, x2, y2 = [float(value) for value in line]
-                length = float(np.hypot(x2 - x1, y2 - y1))
-                raw_angle = float(np.degrees(np.arctan2(y2 - y1, x2 - x1)))
-                normalized = ((raw_angle + 90.0) % 180.0) - 90.0
-                if (axis == 0 and abs(normalized) <= 30.0) or (axis == 1 and abs(abs(normalized) - 90.0) <= 30.0):
-                    line_angles.append((length, normalized))
-            if line_angles:
-                angle_degrees = max(line_angles, key=lambda item: item[0])[1]
-                axis_delta = abs(angle_degrees) if axis == 0 else abs(abs(angle_degrees) - 90.0)
-                spacing_source = float(spacing_source / max(float(np.cos(np.deg2rad(axis_delta))), 1e-6))
-        orientation = "horizontal" if axis == 0 else "vertical"
-        if known_length_mm is None:
+            if lesion_binary is not None:
+                # A stroke lying inside the segmented lesion is a clinical mark,
+                # not a scale reference.
+                if float(lesion_binary[ys, xs].mean()) >= 0.5:
+                    score *= 0.2
+            if score > best_score:
+                best_score = score
+                best = (span, mean[0], axis, points, projections, residual)
+
+        if best is None or best_score < 0.45:
             return ScaleCalibration(
-                method="ruler", reference_type="ruler", reference_length_px=spacing_source,
-                reference_length_mm=interval_mm, interval_mm=interval_mm,
-                reference_bbox_px=bbox, confidence=min(count / 15.0, 0.80) * consistency,
-                orientation=orientation, angle_degrees=angle_degrees,
-                tick_positions_px=tick_positions_source, tick_spacing_px=spacing_source,
-                validated_tick_count=len(tick_positions_source),
-                detected=True, calibration_valid=True,
-                pixels_per_mm=spacing_source / interval_mm,
-                validation_reason=(
-                    "metric ruler minor-tick interval inferred as 1 mm from repeated, "
-                    "uniform subdivisions; confirm the physical ruler markings when precision is critical"
-                ),
+                method="line", reference_type="line",
+                validation_reason="no straight black reference line met the confidence threshold",
             )
-        valid = spacing_source >= 5.0 and count >= 3 and consistency >= 0.50 and known_length_mm > 0
+
+        span, center, axis, points, projections, _ = best
+        start = points[int(np.argmin(projections))]
+        end = points[int(np.argmax(projections))]
+        span_source = float(span / max(scale, 1e-9))
+        start_source = (float(start[0] / scale), float(start[1] / scale))
+        end_source = (float(end[0] / scale), float(end[1] / scale))
+        center_source = (float(center[0] / scale), float(center[1] / scale))
+        xs_source, ys_source = points[:, 0] / scale, points[:, 1] / scale
+        bbox = (
+            int(max(0, xs_source.min() - 4)),
+            int(max(0, ys_source.min() - 4)),
+            int(xs_source.max() - xs_source.min() + 9),
+            int(ys_source.max() - ys_source.min() + 9),
+        )
+        angle = float(np.degrees(np.arctan2(axis[1], axis[0])))
+        orientation = "horizontal" if abs(axis[0]) >= abs(axis[1]) else "vertical"
+        confidence = float(np.clip(best_score * 0.9, 0.0, 0.9))
+
+        if known_length_mm is None or known_length_mm <= 0:
+            return ScaleCalibration(
+                pixels_per_mm=0.0,
+                method="line",
+                reference_type="line_unknown",
+                confidence=float(round(min(confidence, 0.5), 4)),
+                reference_length_px=span_source,
+                reference_length_mm=0.0,
+                reference_center_px=center_source,
+                reference_bbox_px=bbox,
+                axis_endpoints_px=(start_source, end_source),
+                orientation=orientation,
+                angle_degrees=angle,
+                detected=True,
+                calibration_valid=False,
+                validation_reason="physical length of the black line was not supplied; diameter (D) not calculated",
+            )
+
+        valid = span_source >= 20.0 and best_score >= 0.45 and known_length_mm > 0
         return ScaleCalibration(
-            pixels_per_mm=spacing_source / known_length_mm if valid else None,
-            method="ruler", confidence=min(count / 15.0, 0.80) * consistency,
-            reference_type="ruler", reference_length_px=spacing_source,
-            reference_length_mm=known_length_mm, interval_mm=known_length_mm,
-            reference_bbox_px=bbox, orientation=orientation,
-            angle_degrees=angle_degrees,
-            tick_positions_px=tick_positions_source, tick_spacing_px=spacing_source,
-            validated_tick_count=len(tick_positions_source),
-            detected=True, calibration_valid=bool(valid),
+            pixels_per_mm=span_source / known_length_mm if valid else 0.0,
+            method="line",
+            reference_type="line",
+            confidence=float(round(confidence, 4)),
+            reference_length_px=span_source,
+            reference_length_mm=known_length_mm,
+            reference_center_px=center_source,
+            reference_bbox_px=bbox,
+            axis_endpoints_px=(start_source, end_source),
+            orientation=orientation,
+            angle_degrees=angle,
+            detected=True,
+            calibration_valid=bool(valid),
             validation_reason=(
-                "valid ruler interval calibration"
-                if valid else "ruler interval was too small or inconsistent to calibrate reliably"
+                "valid black-line reference calibration"
+                if valid else "black-line span or geometry was unreliable"
             ),
+        )
+
+    def _detect_ruler(
+        self, image: np.ndarray, known_length_mm: Optional[float] = None,
+        lesion_mask: Optional[np.ndarray] = None,
+        tick_interval_mm: Optional[float] = 1.0,
+    ) -> ScaleCalibration:
+        """Calibrate from repeated strokes and the device's minor-tick interval.
+
+        ``known_length_mm`` retains the explicit ruler-mode interval override.
+        Auto mode never reuses a coin diameter as the ruler's tick interval.
+        """
+        rows = find_tick_lattices(image, lesion_mask)
+        if not rows:
+            return ScaleCalibration(
+                method="ruler", reference_type="ruler",
+                validation_reason="fewer than six reliable, aligned, regularly spaced ruler ticks",
+            )
+        best = rows[0]
+        interval = known_length_mm if known_length_mm is not None else tick_interval_mm
+        valid_interval = interval is not None and np.isfinite(interval) and interval > 0
+        # Strong independent rows should agree. Do not hide perspective or
+        # conflicting scales by selecting whichever produces a plausible size.
+        conflict = any(
+            len(row.positions) >= max(6, 0.75 * len(best.positions))
+            and abs(row.spacing / best.spacing - 1.0) > 0.10
+            for row in rows[1:]
+        )
+        valid = bool(valid_interval and not conflict)
+        if conflict:
+            reason = "visible ruler rows disagree on tick spacing; physical measurement withheld"
+        elif not valid_interval:
+            reason = "ruler ticks detected but their physical interval is not configured"
+        else:
+            reason = (f"{len(best.positions)} validated ruler ticks; {best.spacing:.3f} pixels "
+                      f"per configured {interval:g} mm division")
+        points = tuple(tuple(float(value) for value in point) for point in best.points)
+        angle = float(np.degrees(np.arctan2(best.tangent[1], best.tangent[0])))
+        return ScaleCalibration(
+            pixels_per_mm=best.spacing / float(interval) if valid else None,
+            method="ruler", reference_type="ruler", detected=True,
+            confidence=best.confidence if valid else min(best.confidence, 0.49),
+            calibration_valid=valid, validation_reason=reason,
+            reference_length_px=best.spacing,
+            reference_length_mm=float(interval) if valid_interval else None,
+            reference_bbox_px=best.bbox,
+            reference_center_px=tuple(float(value) for value in best.points.mean(axis=0)),
+            orientation="horizontal" if abs(best.tangent[0]) >= abs(best.tangent[1]) else "vertical",
+            angle_degrees=angle, interval_mm=float(interval) if valid_interval else None,
+            tick_positions_px=tuple(float(value) for value in best.positions),
+            tick_spacing_px=best.spacing, validated_tick_count=len(best.positions),
+            reference_points_px=points, tick_points_px=points,
+            axis_endpoints_px=(points[0], points[-1]),
+            reprojection_error_px=best.residual,
+            interval_residuals_px=tuple(float(value) for value in best.interval_residuals),
+            calibration_uncertainty=best.uncertainty,
+            warnings=("Ruler calibration assumes the marks and lesion share the same image plane.",),
         )
 
     @staticmethod

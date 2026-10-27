@@ -10,6 +10,9 @@ export default function Reports({ onNavigate, onAnalysisComplete, mode = 'histor
   const [riskFilter, setRiskFilter] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [downloadingId, setDownloadingId] = useState(null);
+  const [cancellingId, setCancellingId] = useState(null);
+  const [deletingId, setDeletingId] = useState(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState(null);
   const showToast = useToast();
   const { token } = useAuth();
 
@@ -131,6 +134,55 @@ export default function Reports({ onNavigate, onAnalysisComplete, mode = 'histor
     } finally {
       setDownloadingId(null);
     }
+  };
+
+  const handleCancel = async (item) => {
+    if (cancellingId) return;
+    setCancellingId(item.analysis_id);
+    try {
+      const res = await fetch(`/api/analyses/${item.analysis_id}/cancel`, {
+        method: 'POST',
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (res.ok) {
+        showToast('Analysis cancelled.', 'success');
+        setAnalyses((prev) => prev.filter((a) => a.analysis_id !== item.analysis_id));
+      } else {
+        const err = await res.json().catch(() => ({}));
+        showToast(err?.message || 'Could not cancel the analysis.', 'warning');
+      }
+    } catch {
+      showToast('Could not cancel the analysis.', 'error');
+    } finally {
+      setCancellingId(null);
+    }
+  };
+
+  const handleDelete = async (analysisId) => {
+    if (deletingId) return;
+    setDeletingId(analysisId);
+    setConfirmDeleteId(null);
+    try {
+      const res = await fetch(`/api/analyses/${analysisId}`, {
+        method: 'DELETE',
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (res.ok) {
+        showToast('History record deleted.', 'success');
+        setAnalyses((prev) => prev.filter((a) => a.analysis_id !== analysisId));
+      } else {
+        const err = await res.json().catch(() => ({}));
+        showToast(err?.message || 'Could not delete the record.', 'warning');
+      }
+    } catch {
+      showToast('Could not delete the record.', 'error');
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
+  const confirmDelete = (analysisId) => {
+    setConfirmDeleteId(analysisId);
   };
 
   // Determine risk details
@@ -326,7 +378,19 @@ export default function Reports({ onNavigate, onAnalysisComplete, mode = 'histor
                       {/* Actions */}
                       <td style={{ textAlign: 'right' }}>
                         <div className="table-actions-group">
-                          {isFailedAnalysis(item) ? (
+                          {item.status === 'running' || item.status === 'pending' ? (
+                            <button
+                              type="button"
+                              className="btn btn-sm btn-outline"
+                              style={{ color: 'var(--color-warning, #f59e0b)', borderColor: 'var(--color-warning, #f59e0b)' }}
+                              onClick={() => handleCancel(item)}
+                              disabled={cancellingId === item.analysis_id}
+                              title="Cancel this running analysis"
+                            >
+                              <i className={`fas ${cancellingId === item.analysis_id ? 'fa-spinner fa-spin' : 'fa-stop-circle'}`} aria-hidden="true"></i>
+                              <span>{cancellingId === item.analysis_id ? 'Cancelling…' : 'Cancel'}</span>
+                            </button>
+                          ) : isFailedAnalysis(item) ? (
                             <button
                               type="button"
                               className="btn btn-sm btn-outline btn-failed-report"
@@ -357,6 +421,42 @@ export default function Reports({ onNavigate, onAnalysisComplete, mode = 'histor
                                 <i className="fas fa-download"></i>
                               </button>
                             </>
+                          )}
+                          {/* Delete button (always visible) */}
+                          {item.status !== 'running' && item.status !== 'pending' && (
+                            confirmDeleteId === item.analysis_id ? (
+                              <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted, #9ca3af)' }}>Delete?</span>
+                                <button
+                                  type="button"
+                                  className="btn btn-sm"
+                                  style={{ background: '#ef4444', color: '#fff', border: 'none', padding: '4px 8px' }}
+                                  onClick={() => handleDelete(item.analysis_id)}
+                                  disabled={deletingId === item.analysis_id}
+                                >
+                                  {deletingId === item.analysis_id ? <i className="fas fa-spinner fa-spin"></i> : 'Yes'}
+                                </button>
+                                <button
+                                  type="button"
+                                  className="btn btn-sm btn-ghost"
+                                  style={{ padding: '4px 8px' }}
+                                  onClick={() => setConfirmDeleteId(null)}
+                                >
+                                  No
+                                </button>
+                              </span>
+                            ) : (
+                              <button
+                                type="button"
+                                className="btn btn-sm btn-ghost"
+                                onClick={() => confirmDelete(item.analysis_id)}
+                                title="Delete history record"
+                                aria-label="Delete this history record"
+                                style={{ color: '#ef4444' }}
+                              >
+                                <i className="fas fa-trash-alt"></i>
+                              </button>
+                            )
                           )}
                         </div>
                       </td>
@@ -401,7 +501,18 @@ export default function Reports({ onNavigate, onAnalysisComplete, mode = 'histor
                   </div>
 
                   <div className="mobile-card-actions">
-                    {isFailedAnalysis(item) ? (
+                    {item.status === 'running' || item.status === 'pending' ? (
+                      <button
+                        type="button"
+                        className="btn btn-sm btn-outline mobile-btn-flex"
+                        style={{ color: 'var(--color-warning, #f59e0b)', borderColor: 'var(--color-warning, #f59e0b)' }}
+                        onClick={() => handleCancel(item)}
+                        disabled={cancellingId === item.analysis_id}
+                      >
+                        <i className={`fas ${cancellingId === item.analysis_id ? 'fa-spinner fa-spin' : 'fa-stop-circle'}`} aria-hidden="true"></i>
+                        <span>{cancellingId === item.analysis_id ? 'Cancelling…' : 'Cancel'}</span>
+                      </button>
+                    ) : isFailedAnalysis(item) ? (
                       <button
                         type="button"
                         className="btn btn-sm btn-outline btn-failed-report mobile-btn-flex"
@@ -430,6 +541,41 @@ export default function Reports({ onNavigate, onAnalysisComplete, mode = 'histor
                           <i className="fas fa-download" aria-hidden="true"></i>
                         </button>
                       </>
+                    )}
+                    {/* Mobile Delete */}
+                    {item.status !== 'running' && item.status !== 'pending' && (
+                      confirmDeleteId === item.analysis_id ? (
+                        <span style={{ display: 'flex', alignItems: 'center', gap: '4px', marginTop: '4px' }}>
+                          <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted, #9ca3af)' }}>Delete?</span>
+                          <button
+                            type="button"
+                            className="btn btn-sm"
+                            style={{ background: '#ef4444', color: '#fff', border: 'none', padding: '4px 10px' }}
+                            onClick={() => handleDelete(item.analysis_id)}
+                            disabled={deletingId === item.analysis_id}
+                          >
+                            {deletingId === item.analysis_id ? <i className="fas fa-spinner fa-spin"></i> : 'Yes, delete'}
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn-sm btn-ghost"
+                            style={{ padding: '4px 8px' }}
+                            onClick={() => setConfirmDeleteId(null)}
+                          >
+                            Cancel
+                          </button>
+                        </span>
+                      ) : (
+                        <button
+                          type="button"
+                          className="btn btn-sm btn-ghost"
+                          onClick={() => confirmDelete(item.analysis_id)}
+                          title="Delete record"
+                          style={{ color: '#ef4444' }}
+                        >
+                          <i className="fas fa-trash-alt" aria-hidden="true"></i>
+                        </button>
+                      )
                     )}
                   </div>
                 </div>

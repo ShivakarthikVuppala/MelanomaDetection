@@ -22,7 +22,7 @@ from torch.amp import autocast
 from PIL import Image
 
 from .model import SwinV2Classifier
-from ..data.transforms import get_classification_transforms
+from ..engine.transforms import get_classification_transforms
 
 
 def _normalise_text(value: str) -> str:

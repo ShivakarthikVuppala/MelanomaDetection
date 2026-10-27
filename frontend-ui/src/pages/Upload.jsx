@@ -20,6 +20,29 @@ const ANALYSIS_STEPS = [
 
 const BODY_LOCATIONS = ['Face', 'Arm', 'Leg', 'Back', 'Chest', 'Other'];
 
+const SCALE_OPTIONS = [
+  { id: 'none', label: 'None', icon: 'fa-ban', desc: 'No scale object (Diameter D returned in pixels; excluded from fusion score)' },
+  { id: 'line', label: 'Black Line', icon: 'fa-pen-clip', desc: 'Drawn line on skin with known length in mm' },
+  { id: 'ruler', label: 'Metric Ruler', icon: 'fa-ruler', desc: 'Detects repeated 1 mm ruler tick marks' },
+  { id: 'circle', label: 'Coin / Sticker', icon: 'fa-circle-dot', desc: 'Circular reference of standard dimension' },
+  { id: 'auto', label: 'Auto-Detect', icon: 'fa-wand-magic-sparkles', desc: 'Measures visible 1 mm scale marks automatically' },
+];
+
+const COIN_REFERENCES = [
+  { key: 'us_penny', label: 'US Penny (19.05 mm)' },
+  { key: 'us_quarter', label: 'US Quarter (24.26 mm)' },
+  { key: 'us_dime', label: 'US Dime (17.91 mm)' },
+  { key: 'euro_1', label: '1 Euro (23.25 mm)' },
+  { key: 'euro_2', label: '2 Euro (25.75 mm)' },
+  { key: 'inr_1', label: '1 INR Coin (21.50 mm)' },
+  { key: 'inr_2', label: '2 INR Coin (25.00 mm)' },
+  { key: 'inr_5', label: '5 INR Coin (23.00 mm)' },
+  { key: 'gbp_1', label: 'GBP £1 (22.50 mm)' },
+  { key: 'gbp_1p', label: 'GBP 1p (20.30 mm)' },
+  { key: 'sticker_20mm', label: '20 mm Calibration Sticker' },
+  { key: 'sticker_25mm', label: '25 mm Calibration Sticker' },
+];
+
 function validateFile(file) {
   const extension = `.${file.name.split('.').pop()?.toLowerCase()}`;
   if (!TYPES.has(file.type) || !EXTENSIONS.has(extension)) {
@@ -200,6 +223,11 @@ export default function Upload({ onAnalysisComplete, onNavigate }) {
   const [lesionLocation, setLesionLocation] = useState('Arm');
   const [notes, setNotes] = useState('');
 
+  // Scale reference state: default is 'auto' (YOLO-assisted auto-detect)
+  const [scaleMethod, setScaleMethod] = useState('auto');
+  const [lineLengthMm, setLineLengthMm] = useState('');
+  const [coinKey, setCoinKey] = useState('us_penny');
+
   const selectFile = useCallback(async (candidate) => {
     if (!candidate) return;
     const validationError = validateFile(candidate);
@@ -275,7 +303,12 @@ export default function Upload({ onAnalysisComplete, onNavigate }) {
     try {
       const formData = new FormData();
       formData.append('file', file);
-      formData.append('scale_method', 'auto');
+      formData.append('scale_method', scaleMethod);
+      if (scaleMethod === 'circle' && coinKey) {
+        formData.append('scale_reference_key', coinKey);
+      } else if (scaleMethod === 'line' && lineLengthMm && parseFloat(lineLengthMm) > 0) {
+        formData.append('scale_reference_mm', parseFloat(lineLengthMm));
+      }
 
       // Attach patient context for privileged users
       if (isPrivileged && patientId.trim()) {
@@ -765,6 +798,86 @@ export default function Upload({ onAnalysisComplete, onNavigate }) {
                         onChange={(e) => setNotes(e.target.value)}
                         style={{ resize: 'vertical', minHeight: '80px' }}
                       />
+                    </div>
+
+                    {/* Optional Scale Reference Context */}
+                    <div className="upload-context-section">
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+                        <label className="context-label" style={{ marginBottom: 0 }}>
+                          Scale Reference (Optional)
+                        </label>
+                        <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                          {scaleMethod === 'none'
+                            ? 'None (D returned in pixels; excluded from fusion score)'
+                            : scaleMethod === 'auto'
+                            ? 'Visible 1 mm scale marks are measured automatically; no entry needed'
+                            : 'Physical calibration for lesion diameter'}
+                        </span>
+                      </div>
+
+                      <div className="location-pills-row" style={{ marginBottom: '10px' }}>
+                        {SCALE_OPTIONS.map((opt) => (
+                          <button
+                            key={opt.id}
+                            type="button"
+                            className={`location-pill ${scaleMethod === opt.id ? 'active' : ''}`}
+                            onClick={() => setScaleMethod(opt.id)}
+                            title={opt.desc}
+                          >
+                            <i className={`fas ${opt.icon}`} style={{ marginRight: '6px' }}></i>
+                            {opt.label}
+                          </button>
+                        ))}
+                      </div>
+
+                      {/* Line length input if Black Line selected */}
+                      {scaleMethod === 'line' && (
+                        <div style={{ marginTop: '8px', padding: '12px', background: 'var(--bg-card)', borderRadius: '8px', border: '1px solid var(--border)' }}>
+                          <label className="context-label" htmlFor="upload-line-length" style={{ fontSize: '12px', marginBottom: '4px' }}>
+                            Drawn Line Real Length (mm)
+                          </label>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <input
+                              id="upload-line-length"
+                              type="number"
+                              min="1"
+                              max="100"
+                              step="0.5"
+                              className="form-input-clean"
+                              placeholder="e.g. 10 (leave blank to return in pixels)"
+                              value={lineLengthMm}
+                              onChange={(e) => setLineLengthMm(e.target.value)}
+                              style={{ maxWidth: '260px' }}
+                            />
+                            <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>mm</span>
+                          </div>
+                          <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>
+                            {lineLengthMm && parseFloat(lineLengthMm) > 0
+                              ? `Scale calibrated to ${lineLengthMm} mm. Physical diameter will be calculated.`
+                              : 'If left blank, diameter (D) is returned in pixels and excluded from fusion score.'}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Coin / Sticker selection dropdown if Circle selected */}
+                      {scaleMethod === 'circle' && (
+                        <div style={{ marginTop: '8px', padding: '12px', background: 'var(--bg-card)', borderRadius: '8px', border: '1px solid var(--border)' }}>
+                          <label className="context-label" htmlFor="upload-coin-select" style={{ fontSize: '12px', marginBottom: '4px' }}>
+                            Reference Object
+                          </label>
+                          <select
+                            id="upload-coin-select"
+                            className="form-input-clean"
+                            value={coinKey}
+                            onChange={(e) => setCoinKey(e.target.value)}
+                            style={{ maxWidth: '320px' }}
+                          >
+                            {COIN_REFERENCES.map((c) => (
+                              <option key={c.key} value={c.key}>{c.label}</option>
+                            ))}
+                          </select>
+                        </div>
+                      )}
                     </div>
 
                     {/* Historical Images for Evolution */}

@@ -214,6 +214,8 @@ class AnalysisResponse(BaseModel):
     # Patient context — populated only for researcher/practitioner uploads
     patient_id: Optional[str] = None
     patient_name: Optional[str] = None
+    # Internal: owning user — not exposed in public serialisation
+    user_id: Optional[str] = None
 
 
 class AnalysisListItem(BaseModel):

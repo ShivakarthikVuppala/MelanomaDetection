@@ -7,11 +7,11 @@ skin lesion images using Swin Transformer V2, segments lesion boundaries
 using SegFormer, and extracts clinically relevant ABC morphological features.
 
 Modules:
-    - data: Dataset preparation, preprocessing, and augmentation
     - classification: Swin Transformer V2 fine-tuning and inference
     - segmentation: SegFormer-based lesion segmentation
     - features: ABC (Asymmetry, Border, Color) feature extraction
     - engine: Core Diagnosis Engine orchestrating all components
+      (image preprocessing and classification transforms live here)
     - evaluation: Comprehensive evaluation and reporting
 """
 

@@ -378,18 +378,31 @@ export default function Results({ analysisResult, onNavigate }) {
           <section className="report-section" aria-labelledby="scale-analysis-heading">
             <h2 id="scale-analysis-heading" className="report-section-heading">Physical Measurements</h2>
             <div style={{ marginTop: '16px', padding: '16px', background: 'var(--accent-green-bg)', borderRadius: '8px', border: '1px solid rgba(34,197,94,0.2)' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px', flexWrap: 'wrap' }}>
                 <i className="fas fa-ruler-combined" style={{ color: 'var(--accent-green)' }} />
                 <strong style={{ color: 'var(--accent-green)' }}>Physical Measurements (Calibrated)</strong>
                 {diagnosis?.scale_calibration?.detected && (
                   <span style={{ marginLeft: 'auto', fontSize: '11px', padding: '3px 10px', borderRadius: '12px', background: 'var(--accent-green-bg)', border: '1px solid var(--accent-green)', color: 'var(--accent-green)' }}>
-                    {diagnosis.scale_calibration.method} — {(diagnosis.scale_calibration.confidence * 100).toFixed(0)}% confidence
+                    {/yolo/i.test(diagnosis.scale_calibration.method || '')
+                      ? <><i className="fas fa-bolt" style={{ marginRight: 4 }} />YOLO Auto-Detected</>                      : diagnosis.scale_calibration.method}
+                    {' '}&mdash; {(diagnosis.scale_calibration.confidence * 100).toFixed(0)}% confidence
                   </span>
                 )}
               </div>
               <div className="metrics-row">
                 {measurements.diameter_mm != null && (
-                  <div><strong>{measurements.diameter_mm} mm</strong><span>diameter</span></div>
+                  <div>
+                    <strong style={{
+                      fontSize: '22px',
+                      color: measurements.diameter_mm > 6 ? 'var(--danger, #ef4444)' : 'var(--accent-green)'
+                    }}>{measurements.diameter_mm} mm</strong>
+                    <span>diameter
+                      {measurements.diameter_mm > 6
+                        ? <span style={{ marginLeft: 6, fontSize: '11px', padding: '2px 7px', borderRadius: '8px', background: 'rgba(239,68,68,0.12)', color: 'var(--danger,#ef4444)', border: '1px solid rgba(239,68,68,0.3)' }}>&#62; 6 mm threshold</span>
+                        : <span style={{ marginLeft: 6, fontSize: '11px', padding: '2px 7px', borderRadius: '8px', background: 'rgba(34,197,94,0.12)', color: 'var(--accent-green)', border: '1px solid rgba(34,197,94,0.3)' }}>&#60; 6 mm</span>
+                      }
+                    </span>
+                  </div>
                 )}
                 {measurements.area_mm2 != null && (
                   <div><strong>{measurements.area_mm2} mm²</strong><span>area</span></div>
@@ -397,10 +410,24 @@ export default function Results({ analysisResult, onNavigate }) {
                 {measurements.perimeter_mm != null && (
                   <div><strong>{measurements.perimeter_mm} mm</strong><span>perimeter</span></div>
                 )}
+                {measurements.pixels_per_mm != null && (
+                  <div><strong>{measurements.pixels_per_mm}</strong><span>px / mm</span></div>
+                )}
               </div>
+              {diagnosis?.scale_calibration?.reference_type && (
+                <div style={{ marginTop: '10px', fontSize: '12px', color: 'var(--text-muted)' }}>
+                  <i className="fas fa-crosshairs" style={{ marginRight: 5 }} />
+                  Reference detected: <strong>{diagnosis.scale_calibration.reference_type}</strong>
+                  {diagnosis.scale_calibration.reference_diameter_mm && (
+                    <> &mdash; {diagnosis.scale_calibration.reference_diameter_mm} mm physical size</>
+                  )}
+                </div>
+              )}
             </div>
             <p style={{ color: 'var(--text-light)', fontSize: '13px', marginTop: '12px', marginBottom: 0 }}>
-              Physical measurements were calibrated using a detected reference object. Accuracy depends on calibration quality.
+              {/yolo/i.test(diagnosis?.scale_calibration?.method || '')
+                ? 'Diameter calibrated automatically via YOLO scale detection. Ruler or coin reference was identified in the image.'
+                : 'Physical measurements were calibrated using a detected reference object. Accuracy depends on calibration quality.'}
             </p>
           </section>
         )}
@@ -474,10 +501,30 @@ export default function Results({ analysisResult, onNavigate }) {
                 <div>
                   <h3 className="abcde-item-title">D &mdash; Diameter</h3>
                   <span className="abcde-item-metric">
-                    Assessment: <strong>{hasPhysicalScale && measurements.diameter_mm ? `${measurements.diameter_mm} mm` : measurements.diameter_px ? `${measurements.diameter_px} px` : 'Evaluated'}</strong>
+                    Assessment: <strong>
+                      {hasPhysicalScale && measurements.diameter_mm
+                        ? (
+                          <span style={{
+                            padding: '2px 10px',
+                            borderRadius: '10px',
+                            fontSize: '14px',
+                            fontWeight: 700,
+                            background: measurements.diameter_mm > 6
+                              ? 'rgba(239,68,68,0.12)' : 'rgba(34,197,94,0.12)',
+                            color: measurements.diameter_mm > 6
+                              ? 'var(--danger,#ef4444)' : 'var(--accent-green)',
+                            border: `1px solid ${measurements.diameter_mm > 6 ? 'rgba(239,68,68,0.3)' : 'rgba(34,197,94,0.3)'}`,
+                          }}>
+                            {measurements.diameter_mm} mm
+                          </span>
+                        )
+                        : measurements.diameter_px
+                        ? `${measurements.diameter_px} px`
+                        : 'Evaluated'}
+                    </strong>
                     {hasPhysicalScale && measurements.measurement_confidence && (
                       <span style={{ marginLeft: '8px', color: 'var(--text-muted)', fontSize: '12px' }}>
-                        (scale detected with {(measurements.measurement_confidence * 100).toFixed(1)}% confidence)
+                        (scale confidence {(measurements.measurement_confidence * 100).toFixed(1)}%)
                       </span>
                     )}
                   </span>
@@ -485,8 +532,12 @@ export default function Results({ analysisResult, onNavigate }) {
               </div>
               <p className="abcde-item-explanation">
                 {hasPhysicalScale && measurements.diameter_mm
-                  ? measurements.diameter_mm > 6 ? `Calibrated result: Physical diameter is measured at ${measurements.diameter_mm} mm (larger than 6 mm benchmark).` : `Calibrated result: Physical diameter is measured at ${measurements.diameter_mm} mm (within typical 6 mm threshold).`
-                  : 'Lesion dimension estimated. Spots exceeding 6mm or showing rapid expansion warrant in-person review.'}
+                  ? measurements.diameter_mm > 6
+                    ? <>Calibrated result: Physical diameter is <strong>{measurements.diameter_mm} mm</strong> — exceeds the 6 mm clinical benchmark. In-person dermatological evaluation is advised.
+                        {/yolo/i.test(diagnosis?.scale_calibration?.method || '') && <em style={{ display: 'block', marginTop: 4, fontSize: '12px', color: 'var(--text-muted)' }}>(Calibrated automatically via YOLO reference detection)</em>}</>
+                    : <>Calibrated result: Physical diameter is <strong>{measurements.diameter_mm} mm</strong> — within the 6 mm threshold. Continue routine monitoring.
+                        {/yolo/i.test(diagnosis?.scale_calibration?.method || '') && <em style={{ display: 'block', marginTop: 4, fontSize: '12px', color: 'var(--text-muted)' }}>(Calibrated automatically via YOLO reference detection)</em>}</>
+                  : 'Lesion dimension estimated in pixels. Spots exceeding 6 mm or showing rapid expansion warrant in-person review.'}
               </p>
             </div>
             {/* E */}
