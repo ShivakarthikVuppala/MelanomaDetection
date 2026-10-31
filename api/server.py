@@ -1,4 +1,4 @@
-"""FastAPI transport layer for the melanoma analysis workflow."""
+﻿"""FastAPI transport layer for the melanoma analysis workflow."""
 
 import io
 import json
@@ -72,37 +72,69 @@ app = FastAPI(
 
 @app.on_event("startup")
 async def startup_event():
-    from .auth import seed_admin
-    await seed_admin()
+    import asyncio
 
-    # ── Per-user data isolation setup ─────────────────────────────────────
-    from .db import get_db as _get_db
-    _startup_db = _get_db()
-    if _startup_db is not None:
-        # Create compound index for efficient per-user history queries
-        try:
-            await _startup_db["analyses"].create_index(
-                [("user_id", 1), ("diagnosis.metadata.timestamp", -1)],
-                name="user_id_timestamp",
-                background=True,
-            )
-        except Exception as _idx_err:
-            logger.warning(f"Could not create analyses index: {_idx_err}")
-        # Tag all pre-existing legacy records (no user_id) with a sentinel
-        # value so they are NEVER returned to any authenticated user.
-        try:
-            _legacy = await _startup_db["analyses"].update_many(
-                {"user_id": {"$exists": False}},
-                {"$set": {"user_id": "__legacy__"}},
-            )
-            if _legacy.modified_count:
-                logger.info(
-                    f"Tagged {_legacy.modified_count} legacy analysis record(s) "
-                    "with user_id='__legacy__' to prevent cross-user data leakage."
+    async def _db_setup():
+        from .auth import seed_admin
+        await seed_admin()
+
+        # â”€â”€ Per-user data isolation setup â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        from .db import get_db as _get_db
+        _startup_db = _get_db()
+        if _startup_db is not None:
+            # Create compound index for efficient per-user history queries
+            try:
+                await _startup_db["analyses"].create_index(
+                    [("user_id", 1), ("diagnosis.metadata.timestamp", -1)],
+                    name="user_id_timestamp",
+                    background=True,
                 )
-        except Exception as _leg_err:
-            logger.warning(f"Could not tag legacy analyses: {_leg_err}")
-    # ── End per-user data isolation setup ─────────────────────────────────
+            except Exception as _idx_err:
+                logger.warning(f"Could not create analyses index: {_idx_err}")
+            # Tag all pre-existing legacy records (no user_id) with a sentinel
+            # value so they are NEVER returned to any authenticated user.
+            try:
+                _legacy = await _startup_db["analyses"].update_many(
+                    {"user_id": {"$exists": False}},
+                    {"$set": {"user_id": "__legacy__"}},
+                )
+                if _legacy.modified_count:
+                    logger.info(
+                        f"Tagged {_legacy.modified_count} legacy analysis record(s) "
+                        "with user_id='__legacy__' to prevent cross-user data leakage."
+                    )
+            except Exception as _leg_err:
+                logger.warning(f"Could not tag legacy analyses: {_leg_err}")
+        # â”€â”€ End per-user data isolation setup â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+    # ── Warm-up: pre-load AI models at startup to eliminate first-request delay ──
+    def _warm_up_models():
+        if _models_available():
+            try:
+                supervisor = _get_supervisor()
+                supervisor.vision._engine_instance()
+                logger.info("startup_event: Vision models loaded and ready.")
+                supervisor.evidence.warm_up()
+                logger.info("startup_event: Evidence models loaded and ready.")
+            except Exception as _wu_err:
+                logger.warning(f"startup_event: model warm-up failed (non-fatal): {_wu_err}")
+        else:
+            logger.info("startup_event: model checkpoints not found — skipping warm-up.")
+
+    # Run model loading in a thread so it doesn't block the async event loop
+    loop = asyncio.get_running_loop()
+    app.state.model_warmup = loop.run_in_executor(None, _warm_up_models)
+
+    try:
+        await asyncio.wait_for(_db_setup(), timeout=10.0)
+    except asyncio.TimeoutError:
+        logger.warning(
+            "startup_event: MongoDB setup timed out after 10 s "
+            "(DNS or network unreachable). The API will start without DB; "
+            "DB-backed features will be unavailable until connectivity is restored."
+        )
+    except Exception as _startup_err:
+        logger.warning(f"startup_event: non-fatal error during DB setup: {_startup_err}")
 cors_origins = [origin.strip() for origin in os.getenv(
     "CORS_ORIGINS",
     "http://localhost:5173,http://localhost:3000,http://127.0.0.1:5173",
@@ -349,6 +381,9 @@ def _workflow_to_response(state, original_image_url: Optional[str]) -> AnalysisR
             preprocessing=PreprocessingInfoOut(
                 hair_removal=diag.preprocessing.hair_removal,
                 illumination_normalization=diag.preprocessing.illumination_normalization,
+                resized_for_preprocessing=diag.preprocessing.resized_for_preprocessing,
+                original_size=diag.preprocessing.original_size,
+                working_size=diag.preprocessing.working_size,
             ),
             pipeline=PipelineInfoOut(
                 classification_model=diag.pipeline.classification_model,
@@ -421,7 +456,7 @@ def _workflow_to_response(state, original_image_url: Optional[str]) -> AnalysisR
     if state.explanation_result is not None:
         result = state.explanation_result
         if isinstance(result, dict):
-            # Legacy template-mode or fallback dict — map generously
+            # Legacy template-mode or fallback dict â€” map generously
             explanation = ExplanationOut(
                 summary=result.get("summary", result.get("model_observation", "Explanation unavailable.")),
                 reasoning=[s for s in [
@@ -521,6 +556,7 @@ def root():
     return {"message": "Melanoma Supervisor API", "version": "2.0.0"}
 
 
+@app.get("/health")
 @app.get("/api/health")
 async def health():
     db = get_db()
@@ -533,7 +569,11 @@ async def health():
             pass
     return {
         "status": "healthy",
-        "models_loaded": _models_available(),
+        "models_loaded": bool(
+            _supervisor_instance is not None
+            and _supervisor_instance.vision._engine is not None
+        ),
+        "model_checkpoints_available": _models_available(),
         "mongodb_connected": mongo_status,
         "analyses_count": count,
     }
@@ -733,7 +773,7 @@ async def get_analysis(
         except Exception as e:
             logger.error(f"MongoDB error in get_analysis: {e}")
 
-    # In-memory fallback — also check ownership
+    # In-memory fallback â€” also check ownership
     analysis = analyses_store.get(analysis_id)
     if analysis is None:
         raise HTTPException(status_code=404, detail={
@@ -965,13 +1005,13 @@ async def analyze_image(
     scale_reference_mm: Optional[float] = Form(None),
     scale_reference_key: Optional[str] = Form(None),
     clinical_context_json: Optional[str] = Form(None),
-    # Patient context — required for researcher/practitioner, ignored for regular users
+    # Patient context â€” required for researcher/practitioner, ignored for regular users
     patient_id: Optional[str] = Form(None),
     patient_name: Optional[str] = Form(None),
     current_user: dict = Depends(get_current_user),
 ):
     """Run the canonical Supervisor Agent workflow for one image/case.
-    Requires a valid JWT — the authenticated user's ID is attached to the analysis.
+    Requires a valid JWT â€” the authenticated user's ID is attached to the analysis.
     Privileged users (researchers/practitioners) must supply patient_id and patient_name.
     When a patient ID is provided, the patient's full prior history is automatically
     considered when calculating evolution across visits.
@@ -1145,8 +1185,9 @@ async def analyze_image(
             except Exception as e:
                 logger.warning(f"Could not record running status for {analysis_id}: {e}")
     try:
+        supervisor = await run_in_threadpool(_get_supervisor)
         state = await run_in_threadpool(
-            _get_supervisor().run,
+            supervisor.run,
             str(file_path),
             analysis_id=analysis_id,
             save_mask=False,
@@ -1159,6 +1200,9 @@ async def analyze_image(
         analysis = _workflow_to_response(state, original_image_url)
     except Exception:
         logger.exception("Orchestrator pipeline failed for request %s", analysis_id)
+        # Immediately remove the in-memory running stub so no subsequent request
+        # returns "running" for a crashed analysis.
+        analyses_store.pop(analysis_id, None)
         now = datetime.now()
         analysis = AnalysisResponse(
             analysis_id=analysis_id,
@@ -1175,14 +1219,17 @@ async def analyze_image(
             retryable=True,
         )
 
-    # If analysis failed, do NOT show it in patient records: remove running stub
-    if analysis.status in ("failed", "error", "image_quality_insufficient"):
+    # If analysis failed, remove the running stub from patient records.
+    # Include "segmentation_failed" which is also a terminal non-displayable status.
+    _FAILED_STATUSES = ("failed", "error", "image_quality_insufficient", "segmentation_failed")
+    if analysis.status in _FAILED_STATUSES:
         db = get_db()
         if db is not None:
             try:
                 await db["analyses"].delete_one({"analysis_id": analysis_id})
             except Exception:
                 pass
+        analyses_store.pop(analysis_id, None)
         return analysis
 
     # Attach patient metadata to the response object so it is persisted

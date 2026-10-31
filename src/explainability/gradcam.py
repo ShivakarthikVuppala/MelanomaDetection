@@ -17,6 +17,7 @@ Usage:
 """
 
 from pathlib import Path
+import threading
 from typing import Optional
 
 import numpy as np
@@ -56,10 +57,11 @@ class SwinGradCAM:
             "cuda" if torch.cuda.is_available() else "cpu"
         )
         self.img_size = img_size
+        self.model_lock = threading.RLock()
 
         # Load checkpoint (support both raw state_dict and full checkpoint)
         raw = torch.load(
-            checkpoint_path, map_location=self.device, weights_only=False
+            checkpoint_path, map_location="cpu", weights_only=False
         )
 
         if isinstance(raw, dict) and "model_state_dict" in raw:
@@ -86,6 +88,37 @@ class SwinGradCAM:
         # Preprocessing
         self.transform = get_classification_transforms("val", img_size)
 
+    @classmethod
+    def from_model(
+        cls,
+        model: "SwinV2Classifier",
+        class_names: list,
+        img_size: int = 256,
+        device: torch.device = None,
+        model_lock=None,
+    ) -> "SwinGradCAM":
+        """Construct SwinGradCAM from an already-loaded SwinV2Classifier model.
+
+        Use this in CoreDiagnosisEngine to avoid loading the 1.4 GB checkpoint a
+        second time -- the classifier and Grad-CAM share the same model object in RAM.
+
+        Args:
+            model: Already-loaded and eval()-mode SwinV2Classifier instance.
+            class_names: List of class name strings, e.g. ["melanoma", "non_melanoma"].
+            img_size: Input image size used during training (default 256).
+            device: Torch device; inferred from model parameters if None.
+        """
+        resolved_device = device or next(model.parameters()).device
+        instance = cls.__new__(cls)
+        instance.device = resolved_device
+        instance.img_size = img_size
+        instance.class_names = list(class_names)
+        instance.model = model  # Shared -- no extra disk I/O or RAM duplication
+        instance.model_lock = model_lock if model_lock is not None else threading.RLock()
+        instance.target_layer = instance._find_target_layer()
+        instance.transform = get_classification_transforms("val", img_size)
+        return instance
+
     def _find_target_layer(self):
         """Find the appropriate target layer for Grad-CAM in Swin V2."""
         # For Swin Transformers in timm, the last norm layer works best
@@ -111,57 +144,8 @@ class SwinGradCAM:
                 - prediction: predicted class name
                 - confidence: prediction confidence
         """
-        # Load original image (for visualization)
-        pil_img = Image.open(image_path).convert("RGB")
-        original = np.array(pil_img.resize((self.img_size, self.img_size)))
-        original_float = original.astype(np.float32) / 255.0
-
-        # Preprocess for model
-        transformed = self.transform(image=np.array(pil_img))
-        input_tensor = transformed["image"].unsqueeze(0).to(self.device)
-
-        # Get prediction
-        with torch.no_grad():
-            logits = self.model(input_tensor)
-            probs = torch.softmax(logits, dim=1).squeeze(0)
-            pred_idx = int(probs.argmax())
-            confidence = float(probs[pred_idx]) * 100.0
-
-        # Grad-CAM
-        target_idx = target_class if target_class is not None else pred_idx
-        targets = [ClassifierOutputTarget(target_idx)]
-
-        # Reshape transform for Swin Transformer compatibility
-        def reshape_transform(tensor, height=8, width=8):
-            if tensor.ndim == 3:
-                # Swin outputs (B, H*W, C) — reshape to (B, C, H, W)
-                B, HW, C = tensor.shape
-                h = w = int(HW ** 0.5)
-                return tensor.reshape(B, h, w, C).permute(0, 3, 1, 2)
-            elif tensor.ndim == 4:
-                # Timms' SwinV2 often outputs (B, H, W, C)
-                return tensor.permute(0, 3, 1, 2)
-            return tensor
-
-        cam = GradCAM(
-            model=self.model,
-            target_layers=[self.target_layer],
-            reshape_transform=reshape_transform,
-        )
-
-        grayscale_cam = cam(input_tensor=input_tensor, targets=targets)
-        grayscale_cam = grayscale_cam[0, :]  # (H, W)
-
-        # Create overlay
-        overlay = show_cam_on_image(original_float, grayscale_cam, use_rgb=True)
-
-        return {
-            "original": original_float,
-            "heatmap": grayscale_cam,
-            "overlay": overlay / 255.0 if overlay.max() > 1 else overlay,
-            "prediction": self.class_names[pred_idx].capitalize(),
-            "confidence": round(confidence, 2),
-        }
+        with Image.open(image_path) as image:
+            return self.generate_from_array(np.array(image.convert("RGB")), target_class)
 
     def save_visualization(
         self,
@@ -269,6 +253,15 @@ class SwinGradCAM:
         Returns:
             Same dict format as generate().
         """
+        with self.model_lock:
+            try:
+                return self._generate_from_array(image, target_class)
+            finally:
+                self.model.zero_grad(set_to_none=True)
+
+    def _generate_from_array(
+        self, image: np.ndarray, target_class: Optional[int] = None
+    ) -> dict:
         original = np.array(
             Image.fromarray(image).resize((self.img_size, self.img_size))
         )
@@ -298,14 +291,12 @@ class SwinGradCAM:
                 return tensor.permute(0, 3, 1, 2)
             return tensor
 
-        cam = GradCAM(
+        with GradCAM(
             model=self.model,
             target_layers=[self.target_layer],
             reshape_transform=reshape_transform,
-        )
-
-        grayscale_cam = cam(input_tensor=input_tensor, targets=targets)
-        grayscale_cam = grayscale_cam[0, :]  # (H, W)
+        ) as cam:
+            grayscale_cam = cam(input_tensor=input_tensor, targets=targets)[0, :]
 
         overlay = show_cam_on_image(original_float, grayscale_cam, use_rgb=True)
 

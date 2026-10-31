@@ -304,15 +304,8 @@ def _generate_otp() -> str:
 
 
 def _send_otp_email(email: str, first_name: str, otp: str):
-    # Always print prominently so developers/testers can find the OTP in server console
-    print(
-        f"\n{'='*60}\n"
-        f"[EMAIL OTP] Code for {email}: {otp}\n"
-        f"Valid for 10 minutes\n"
-        f"{'='*60}\n",
-        flush=True,
-    )
 
+    
     email_host = os.getenv("EMAIL_HOST", "").strip()
     email_user = os.getenv("EMAIL_USER", "").strip()
     email_password = os.getenv("EMAIL_PASSWORD", "").strip()

@@ -34,9 +34,6 @@ tqdm>=4.66.0
 # Explainability (Grad-CAM for Vision Transformers)
 grad-cam>=1.5.0
 
-# MedSAM dependency (install separately):
-#   pip install git+https://github.com/facebookresearch/segment-anything.git
-
 # Phase 2 — Medical Evidence Retrieval
 sentence-transformers>=3.0.0
 qdrant-client>=1.12.0

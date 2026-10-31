@@ -46,6 +46,9 @@ class ExplainabilityInfoOut(BaseModel):
 class PreprocessingInfoOut(BaseModel):
     hair_removal: bool = False
     illumination_normalization: bool = False
+    resized_for_preprocessing: bool = False
+    original_size: Dict[str, Optional[int]] = Field(default_factory=dict)
+    working_size: Dict[str, Optional[int]] = Field(default_factory=dict)
 
 
 class ScaleCalibrationOut(BaseModel):

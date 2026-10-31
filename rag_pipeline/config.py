@@ -43,6 +43,14 @@ class Settings(BaseSettings):
         default=0.0, ge=0.0, le=2.0,
         description="LLM temperature for evidence evaluation (should be 0 for determinism)"
     )
+    LLM_TIMEOUT_SECONDS: float = Field(
+        default=20.0, gt=0,
+        description="Maximum wait for a retrieval LLM request before using standard queries"
+    )
+    LLM_MAX_RETRIES: int = Field(
+        default=0, ge=0,
+        description="Additional retrieval LLM attempts; interactive requests default to none"
+    )
 
     # ── Embedding Model ───────────────────────────────────────
     EMBEDDING_MODEL: str = Field(

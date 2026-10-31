@@ -86,14 +86,16 @@ class ClinicalContextAgent:
         import os
         import json
         import re
-        from google import genai
+        from .llm_client import create_gemini_client
         from PIL import Image
         
         api_key = os.environ.get("GEMINI_API_KEY", "")
         if not api_key:
             raise RuntimeError("GEMINI_API_KEY environment variable is not set.")
             
-        client = genai.Client(api_key=api_key)
+        client = create_gemini_client(
+            api_key, timeout_seconds=config.get("request_timeout_seconds", 30.0)
+        )
         model_name = config.get("model") or os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
 
         
@@ -144,7 +146,10 @@ class ClinicalContextAgent:
             with Image.open(path) as img:
                 parts.append(img.copy())
                 
-        response = client.models.generate_content(model=model_name, contents=parts)
+        try:
+            response = client.models.generate_content(model=model_name, contents=parts)
+        finally:
+            client.close()
         text = re.sub(r"```(?:json)?", "", response.text).strip()
         
         try:

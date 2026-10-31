@@ -14,6 +14,7 @@ Supports two checkpoint formats:
 
 from contextlib import nullcontext
 from pathlib import Path
+import threading
 from typing import Optional
 
 import numpy as np
@@ -67,10 +68,11 @@ class SwinV2Predictor:
             "cuda" if torch.cuda.is_available() else "cpu"
         )
         self.img_size = img_size
+        self.model_lock = threading.RLock()
 
         # Load checkpoint (support both raw state_dict and full checkpoint)
         raw = torch.load(
-            checkpoint_path, map_location=self.device, weights_only=False
+            checkpoint_path, map_location="cpu", weights_only=False
         )
 
         if isinstance(raw, dict) and "model_state_dict" in raw:
@@ -188,7 +190,8 @@ class SwinV2Predictor:
             if self.device.type == "cuda"
             else nullcontext()
         )
-        with autocast_context:
+        # Grad-CAM shares these weights and temporarily installs forward hooks.
+        with self.model_lock, autocast_context:
             logits = self.model(tensor)
 
         probs = torch.softmax(logits.float(), dim=1).squeeze(0).cpu().numpy()

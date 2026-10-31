@@ -18,6 +18,7 @@ Usage:
     queries = generate_queries(metrics, llm, use_hyde=True)
 """
 
+import json
 import logging
 from typing import Dict, Any, List
 
@@ -103,14 +104,16 @@ def generate_standard_queries(
 # ============================================================
 
 HYDE_PROMPT_TEMPLATE = """You are a dermatology textbook author.
-Write a short medical textbook paragraph (2-3 sentences) that would
-appear in a clinical dermatology reference describing a skin lesion
-with the following {criterion} measurement.
+For EACH measurement below, write a separate medical textbook paragraph
+(2-3 sentences) describing that criterion. Sound like a professional
+dermatology reference (e.g., Fitzpatrick's). Preserve all stated measurement
+and calibration limitations. Do not invent history or physical dimensions.
 
-Measurement: {description}
+Measurements: {measurements}
 
-Write ONLY the textbook paragraph. No headings, no bullet points.
-Sound like a professional dermatology reference (e.g., Fitzpatrick's).
+Return ONLY JSON with this structure, keeping each criterion name unchanged:
+{{"queries": [{{"criterion": "criterion name", "paragraph": "textbook paragraph"}}]}}
+Include exactly one paragraph for each supplied criterion.
 """
 
 
@@ -121,9 +124,8 @@ def generate_hyde_queries(
     """
     Generate HyDE (Hypothetical Document Embeddings) queries.
 
-    For each ABCDE criterion, asks the LLM to write a hypothetical
-    medical textbook paragraph describing a lesion with those specific
-    measurements.  The resulting paragraph embeds much closer to actual
+    In one request, asks the LLM for a separate hypothetical medical textbook
+    paragraph for each supplied ABCDE criterion. The resulting paragraphs embed closer to actual
     medical passages in vector space than a short keyword query.
 
     Parameters
@@ -215,41 +217,39 @@ def generate_hyde_queries(
                 )
             })
 
-    # Generate hypothetical paragraphs
+    # Generate all criteria in one request. Five serial LLM calls made the
+    # first evidence cycle especially slow, and mutating the shared client's
+    # temperature also allowed concurrent cases to affect one another.
     queries = []
-    original_temp = getattr(llm, 'temperature', 0.1)
-
-    try:
-        # Use slightly creative temperature for HyDE
-        llm.temperature = 0.3
-
+    if hyde_configs:
+        prompt = HYDE_PROMPT_TEMPLATE.format(measurements=json.dumps(hyde_configs))
+        response = llm.invoke(prompt, temperature=0.3)
+        content = response.content
+        if isinstance(content, list):
+            content = " ".join(
+                block.get("text", "") if isinstance(block, dict) else str(block)
+                for block in content
+            )
+        content = (content or "").strip()
+        if content.startswith("```"):
+            content = "\n".join(content.splitlines()[1:-1])
+        data = json.loads(content)
+        paragraphs = {
+            item["criterion"]: item["paragraph"].strip()
+            for item in data.get("queries", [])
+            if isinstance(item, dict)
+            and isinstance(item.get("criterion"), str)
+            and isinstance(item.get("paragraph"), str)
+            and len(item["paragraph"].strip()) > 20
+        }
+        # Incomplete or malformed output falls back to standard queries in
+        # generate_queries(), keeping coverage of all the requested criteria.
         for config in hyde_configs:
-            try:
-                prompt = HYDE_PROMPT_TEMPLATE.format(**config)
-                response = llm.invoke(prompt)
-
-                content = response.content
-                if isinstance(content, list):
-                    content = " ".join(
-                        block.get("text", str(block)) if isinstance(block, dict) else str(block)
-                        for block in content
-                    )
-
-                if content and len(content.strip()) > 20:
-                    queries.append(content.strip())
-                    logger.info(
-                        f"HyDE query for {config['criterion']}: "
-                        f"{content.strip()[:80]}..."
-                    )
-
-            except Exception as e:
-                logger.warning(
-                    f"HyDE generation failed for {config['criterion']}: {e}"
-                )
-
-    finally:
-        # Restore original temperature
-        llm.temperature = original_temp
+            paragraph = paragraphs.get(config["criterion"])
+            if not paragraph:
+                raise ValueError(f"HyDE response omitted {config['criterion']}")
+            queries.append(paragraph)
+        logger.info("Generated %d HyDE paragraphs in one LLM request", len(queries))
 
     # Always add standard management query (not HyDE)
     queries.append(

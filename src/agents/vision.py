@@ -1,5 +1,6 @@
 """Vision Agent: coordinates deterministic ML/CV tools and returns typed observations."""
 from __future__ import annotations
+import threading
 from typing import Any, Dict, Optional
 import numpy as np
 from PIL import Image
@@ -9,11 +10,14 @@ class VisionAgent:
     name = "vision"
     def __init__(self, config_path: str = "config.yaml", engine: Any = None):
         self.config_path, self._engine = config_path, engine
+        self._engine_init_lock = threading.Lock()
 
     def _engine_instance(self):
         if self._engine is None:
-            from ..engine.engine import CoreDiagnosisEngine
-            self._engine = CoreDiagnosisEngine(self.config_path)
+            with self._engine_init_lock:
+                if self._engine is None:
+                    from ..engine.engine import CoreDiagnosisEngine
+                    self._engine = CoreDiagnosisEngine(self.config_path)
         return self._engine
 
     def validate_image(self, state: CaseState, quality_config: Optional[Dict[str, Any]] = None) -> CaseState:

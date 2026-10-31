@@ -17,6 +17,8 @@ preprocessing:
   illumination_normalization: true
   preserve_scale_reference: true
   max_processing_dimension: 1600
+  # Store the exact cleaned model input so reports can show the selected layer.
+  save_preprocessed_preview: true
 
 # Technical input gate only; these are conservative baselines and should be
 # calibrated against representative validation images before production use.
@@ -132,9 +134,11 @@ explainability:
   llm_provider: gemini          # gemini (requires GEMINI_API_KEY env var)
   model: gemini-3.8-flash
   fallback_model: gemini-3.1-flash-lite
-  max_retries: 5
-  retry_delay: 3.0
-  fallback_after_retries: 3
+  # Interactive requests try the primary model once, then the fallback once.
+  request_timeout_seconds: 30.0
+  max_retries: 2
+  retry_delay: 1.0
+  fallback_after_retries: 1
   gradcam_ail_threshold: 0.30
   compute_gradcam: true
 
@@ -151,6 +155,11 @@ report:
 # Orchestrator Agent — Agentic Decision Thresholds
 # ---------------------------------------------------------------------------
 orchestrator:
+  # The Gemini planner receives the current CaseState and a constrained list
+  # of safe function tools on every orchestration step. It falls back to the
+  # local policy when no Gemini key/service is available.
+  cognitive_reasoning: true
+  request_timeout_seconds: 15.0
   classification_confidence_threshold: 70.0
   segmentation_min_area_px: 100
   segmentation_max_area_ratio: 1.0

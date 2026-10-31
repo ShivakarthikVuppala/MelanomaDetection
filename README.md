@@ -181,6 +181,20 @@ python -m pytest tests/                        # run test suite
 
 ### API
 
+The API warms the vision and evidence models in the background at startup.
+An upload arriving during warm-up waits for that same model instance. Check
+`/api/health`: `models_loaded` reflects vision readiness, while
+`model_checkpoints_available` only checks the files. Docker keeps downloaded
+embedding and reranking models in the mounted `models/` directory across rebuilds.
+
+HyDE prepares all supplied ABCDE criteria in one LLM call. Retrieval calls default
+to a 20-second timeout (`LLM_TIMEOUT_SECONDS`); failed query generation uses the
+standard evidence queries. `config.yaml` sets deliberation to 15 seconds and
+explanation attempts to 30 seconds each, trying the primary and fallback model
+once each before using the existing template explanation. These are per-request
+limits, not a deadline for the whole analysis. The execution trace includes
+`duration_ms` for each processing action to identify remaining slow stages.
+
 `POST /api/analyze` is the single canonical analysis endpoint (multipart form) hosted on `http://localhost:8000`.
 
 | Field | Required | Description |

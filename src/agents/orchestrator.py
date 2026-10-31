@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import json
 import logging
+from time import perf_counter
 from pathlib import Path
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
@@ -20,6 +21,54 @@ logger = logging.getLogger(__name__)
 
 class OrchestratorAgent:
     name = "orchestrator"
+
+    # These are callable workflow tools, not diagnostic conclusions.  The
+    # model is only allowed to select from the tools that pass the local
+    # precondition checks in ``_eligible_actions``.  Keeping that validation
+    # outside the model prevents an LLM response from bypassing image-quality
+    # or report-completeness safeguards.
+    TOOL_CATALOG: Dict[str, Dict[str, str]] = {
+        "validate_image": {
+            "function": "VisionAgent.validate_image",
+            "description": "Check image dimensions, blur, illumination and input safety before analysis.",
+        },
+        "classify_image": {
+            "function": "VisionAgent.analyze",
+            "description": "Preprocess the image, classify it, segment the lesion, extract ABCD features and calibration evidence.",
+        },
+        "refine_and_reclassify": {
+            "function": "VisionAgent.refine_and_reclassify",
+            "description": "Retry vision analysis using the lesion ROI when Grad-CAM attention is not aligned with the lesion.",
+        },
+        "assess_evolution": {
+            "function": "ClinicalContextAgent.assess_evolution",
+            "description": "Compare supplied historical lesion images for the ABCDE Evolution criterion.",
+        },
+        "request_clinical_context": {
+            "function": "ClinicalContextAgent.update",
+            "description": "Record supplied history or explicitly mark Evolution as unavailable; never infer history from one image.",
+        },
+        "apply_abcde_fusion": {
+            "function": "compute_fusion",
+            "description": "Combine the classifier, image-derived ABCD observations and supplied Evolution evidence into a risk synthesis.",
+        },
+        "retrieve_evidence": {
+            "function": "EvidenceAgent.retrieve_evidence",
+            "description": "Retrieve targeted medical literature. Accepts an optional concise evidence_query argument.",
+        },
+        "generate_explanation": {
+            "function": "ReportAgent.generate_explanation",
+            "description": "Create an uncertainty-aware explanation from validated findings and available evidence.",
+        },
+        "generate_report": {
+            "function": "ReportAgent.generate_report",
+            "description": "Create the final structured report after an explanation is available.",
+        },
+        "finish_case": {
+            "function": "OrchestratorAgent.finish_case",
+            "description": "Finish only after a rejected image or a completed report.",
+        },
+    }
 
     def __init__(
         self,
@@ -64,6 +113,7 @@ class OrchestratorAgent:
         self._gemini_client = None
         self._llm_model = orchestrator.get("model", self._explainability_cfg.get("model", "gemini-2.5-flash"))
         self._llm_enabled = orchestrator.get("cognitive_reasoning", True)
+        self._llm_timeout_seconds = float(orchestrator.get("request_timeout_seconds", 15.0))
         self._latest_thought: Optional[str] = None
         self._latest_mind_decision: Optional[Dict[str, Any]] = None
 
@@ -82,90 +132,64 @@ class OrchestratorAgent:
             return None
 
         try:
-            from google import genai
-            self._gemini_client = genai.Client(api_key=api_key)
+            from .llm_client import create_gemini_client
+            self._gemini_client = create_gemini_client(
+                api_key, timeout_seconds=self._llm_timeout_seconds
+            )
             return self._gemini_client
         except Exception as err:
             logger.debug(f"Could not initialize GenAI Client for orchestrator: {err}")
             return None
 
-    def _deliberate_with_mind(self, state: CaseState) -> Optional[Dict[str, Any]]:
-        """
-        Cognitive reasoning core of the Orchestrator.
-        Uses Gemini to evaluate findings, identify clinical uncertainties,
-        and formulate targeted evidence retrieval or stop criteria.
+    def _deliberate_with_mind(
+        self, state: CaseState, allowed_actions: List[str]
+    ) -> Optional[Dict[str, Any]]:
+        """Ask the LLM to choose the next *eligible* workflow tool.
+
+        This is intentionally a planner rather than a free-form medical
+        decider: deterministic code determines which actions are safe and
+        executable, while the LLM evaluates the live CaseState and selects a
+        next tool (and an evidence query where relevant).
         """
         client = self._get_llm_client()
-        if client is None:
+        if client is None or not allowed_actions:
             return None
-
-        # Build clinical case observations
-        diag = state.diagnosis_result
-        pred = getattr(getattr(diag, "diagnosis", None), "prediction", "unknown") if diag else "unknown"
-        conf = float(getattr(getattr(diag, "diagnosis", None), "confidence", 0.0) or 0.0) if diag else 0.0
-        mel_prob = float(diag.probabilities.get("melanoma", 0.0)) if (diag and hasattr(diag, "probabilities")) else 0.0
-
-        features = getattr(diag, "clinical_features", {}) or {}
-        feat_summary = []
-        for name in ("asymmetry", "border", "color", "diameter", "evolution"):
-            f = features.get(name)
-            if f:
-                if name == "diameter" and ("px" in str(getattr(f, "score_label", "")).lower() or not (getattr(f, "details", {}) or {}).get("calibrated", False)):
-                    continue
-                feat_summary.append(
-                    f"{name.capitalize()}: {getattr(f, 'score_label', 'unknown')} "
-                    f"(score: {getattr(f, 'score_numeric', 0.0):.2f})"
-                )
-
-        fusion = state.fusion_result
-        fusion_summary = (
-            f"Composite score: {fusion.composite_score:.2f}, Prediction: {fusion.prediction}"
-            if fusion else "Not calculated"
+        tools = [
+            {"name": action, **self.TOOL_CATALOG[action]}
+            for action in allowed_actions
+        ]
+        case_state = self._format_case_state_json(
+            state, len(state.agent_decisions) + len(state.tool_executions) + 1
         )
+        prompt = f"""You are the workflow planner for an AI-assisted melanoma research and decision-support system.
+Choose exactly one next tool from AVAILABLE_TOOLS after analyzing CASE_STATE. Do not diagnose, invent observations, or select a tool not listed. The tool executor independently enforces every safety precondition.
 
-        evidence_titles = [f"'{e.title}' (rel: {e.relevance_score:.2f})" for e in state.evidence[:5]]
-        cycles = state.evidence_assessment.cycles_completed
-        max_c = self.evidence.max_cycles
+AVAILABLE_TOOLS:
+{json.dumps(tools, indent=2)}
 
-        prompt = f"""You are the cognitive Orchestrator Agent for an AI Melanoma Diagnostic system.
-You are in the Clinical Evidence Deliberation Phase.
-Evaluate the diagnostic findings and determine if literature retrieval is needed or if evidence is sufficient to explain the case.
+CASE_STATE:
+{json.dumps(case_state, indent=2, default=str)}
 
-Patient & Diagnostic Findings:
-- Model Prediction: {pred} (Confidence: {conf:.1f}%, Melanoma Probability: {mel_prob:.2f})
-- Multimodal ABCDE Fusion: {fusion_summary}
-- Clinical Features: {', '.join(feat_summary) if feat_summary else 'Extracted from image'}
-- Attention Alignment: {state.uncertainty.classification:.2f}
-- Evidence Cycles Completed: {cycles} of {max_c}
-- Evidence Retrieved So Far: {', '.join(evidence_titles) if evidence_titles else 'None'}
-- Clinical Context / Patient History: {state.clinical_context.get('patient_history', 'None provided')}
-
-Guidelines for your decision:
-1. If evidence cycles completed is 0, or if critical uncertainty/discrepancy exists between classifier and ABCD features and cycles < {max_c}:
-   Choose action: "retrieve_evidence"
-   Provide a targeted "evidence_query" addressing the specific diagnostic nuance (e.g. differential criteria, atypical presentation, specific ABCDE guidelines).
-2. If the retrieved literature provides adequate clinical grounding for the findings, or cycles have exhausted:
-   Choose action: "generate_explanation"
-   Set "evidence_query": null
-
-Respond in valid JSON only:
+Return valid JSON only:
 {{
-  "thought": "<concise clinical reasoning explaining your observation and why you chose this action>",
-  "action": "retrieve_evidence" or "generate_explanation",
-  "reason": "<short label for the reason category>",
-  "evidence_query": "<search query string or null>"
+  "tool_name": "<one AVAILABLE_TOOLS name>",
+  "rationale": "<brief, auditable observation-based rationale; no hidden chain of thought>",
+  "reason": "<short reason category>",
+  "evidence_query": "<concise literature query only when tool_name is retrieve_evidence; otherwise null>"
 }}
 """
         try:
-            print("\n[Orchestrator Mind] Invoking Gemini Cognitive Mind for case deliberation...", flush=True)
+            print("\n[Orchestrator Mind] Invoking Gemini tool planner for the current CaseState...", flush=True)
             resp = client.models.generate_content(
                 model=self._llm_model,
                 contents=prompt,
                 config={"response_mime_type": "application/json"}
             )
-            raw = (resp.text or "").strip()
+            raw = (resp.text or "").strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
             data = json.loads(raw)
-            if isinstance(data, dict) and data.get("action") in {"retrieve_evidence", "generate_explanation"}:
+            if isinstance(data, dict) and data.get("tool_name") in allowed_actions:
+                data["action"] = data["tool_name"]  # backwards-compatible trace shape
+                data["thought"] = data.get("rationale", "")
                 self._latest_mind_decision = data
                 return data
         except Exception as exc:
@@ -221,6 +245,16 @@ Respond in valid JSON only:
                 "probabilities": {},
                 "threshold": None,
             }
+
+        preprocessing_obj = getattr(diag, "preprocessing", None) if diag else None
+        preprocessing_summary = (
+            preprocessing_obj.model_dump(mode="json")
+            if hasattr(preprocessing_obj, "model_dump")
+            else dict(preprocessing_obj or {})
+        )
+        # The planner needs the operations and geometry, never a local file
+        # path to a patient image.
+        preprocessing_summary.pop("preprocessed_image_path", None)
 
         # 3. Clinical ABCD feature extraction
         features = getattr(diag, "clinical_features", {}) or {} if diag else {}
@@ -329,6 +363,7 @@ Respond in valid JSON only:
             "step_number": step_num,
             "workflow_status": state.status,
             "image_quality": quality_summary,
+            "preprocessing": preprocessing_summary,
             "vision_diagnosis": vision_summary,
             "clinical_features_abcd": abcd_summary,
             "gradcam_attention": gradcam_summary,
@@ -522,6 +557,7 @@ Respond in valid JSON only:
         )
 
         for step_idx in range(self.max_steps):
+            step_started = perf_counter()
             self._latest_thought = None
             self._latest_mind_decision = None
             action, reason = self.choose_next_action(state)
@@ -551,6 +587,7 @@ Respond in valid JSON only:
                 detail["cognitive_mode"] = "gemini_guided_deliberation"
 
             state.record(self.name, action, "selected", reason, detail=detail)
+            decision_event = state.agent_decisions[-1]
 
             if action == "finish_case":
                 state.status = "completed" if not state.error_code else "failed"
@@ -658,7 +695,14 @@ Respond in valid JSON only:
                         tool=True,
                     )
                 elif action == "retrieve_evidence":
-                    self.evidence.retrieve_evidence(state, reason)
+                    # Keep the planner's search goal separate from its short
+                    # audit reason.  This lets the LLM target retrieval
+                    # without treating free-form text as an executable tool.
+                    evidence_goal = (
+                        (self._latest_mind_decision or {}).get("evidence_query")
+                        or reason
+                    )
+                    self.evidence.retrieve_evidence(state, evidence_goal)
                 elif action == "generate_explanation":
                     self.report.generate_explanation(state)
                 elif action == "generate_report":
@@ -681,6 +725,10 @@ Respond in valid JSON only:
                 )
                 state.status = "failed"
                 return state
+            finally:
+                duration_ms = round((perf_counter() - step_started) * 1000, 2)
+                decision_event.detail["duration_ms"] = duration_ms
+                logger.info("Analysis %s: %s took %.2fs", analysis_id, action, duration_ms / 1000)
 
         state.error_code, state.user_message, state.status = (
             "orchestrator_step_limit",
@@ -689,68 +737,61 @@ Respond in valid JSON only:
         )
         return state
 
-    def choose_next_action(self, state: CaseState) -> Tuple[str, str]:
-        """
-        Hybrid Guided Reasoning policy:
-        Combines mandatory clinical prerequisite ordering with LLM cognitive deliberation.
-        """
-        # ── 1. Mandatory Safety & Foundational Observations ────────────────
+    def _eligible_actions(self, state: CaseState) -> Tuple[List[str], str]:
+        """Return locally safe next tools and a deterministic offline fallback."""
+        # These gates are intentionally code-owned.  An LLM can plan the next
+        # safe action, but cannot start inference on an unvalidated image or
+        # emit a report without its required artifacts.
         if not state.image_quality:
-            return "validate_image", "image_quality"
+            return ["validate_image"], "image_quality"
         if not state.image_quality.get("accepted"):
             state.error_code, state.user_message, state.retryable = (
                 "image_quality_insufficient",
                 state.image_quality.get("reason"),
                 True,
             )
-            return "finish_case", "image_quality"
+            return ["finish_case"], "image_quality"
         if state.diagnosis_result is None:
-            return "classify_image", "vision_required"
+            return ["classify_image"], "vision_required"
         if self._should_adapt_from_gradcam(state):
-            return "refine_and_reclassify", "gradcam_visual_misaligned"
+            return ["refine_and_reclassify"], "gradcam_visual_misaligned"
         if state.historical_images and "evolution" not in state.clinical_context:
-            return "assess_evolution", "historical_images_present"
+            return ["assess_evolution"], "historical_images_present"
         if "E" not in state.abcde:
-            return "request_clinical_context", "missing_evolution"
+            return ["request_clinical_context"], "missing_evolution"
         if state.fusion_result is None:
-            return "apply_abcde_fusion", "abcde_ready"
+            return ["apply_abcde_fusion"], "abcde_ready"
 
-        # ── 2. Cognitive Deliberation Phase (Orchestrator Mind) ─────────────
         if state.explanation is None:
-            # Active deliberation via LLM if cycles remain
-            if state.evidence_assessment.cycles_completed < self.evidence.max_cycles:
-                mind_decision = self._deliberate_with_mind(state)
-                if mind_decision:
-                    thought = mind_decision.get("thought", "")
-                    action = mind_decision.get("action")
-                    reason = mind_decision.get("reason") or "cognitive_deliberation"
-                    query = mind_decision.get("evidence_query")
-                    self._latest_thought = thought
-                    self._latest_mind_decision = mind_decision
-
-                    if action == "retrieve_evidence":
-                        return "retrieve_evidence", query or reason
-                    elif action == "generate_explanation":
-                        state.evidence_assessment.sufficient = True
-                        return "generate_explanation", "evidence_sufficient"
-
-            # Deterministic clinical fallback if LLM is offline or unconfigured
             if state.evidence_assessment.cycles_completed == 0:
-                return (
-                    "retrieve_evidence",
-                    "differential" if state.uncertainty.classification < self.confidence_threshold else "ABCDE",
-                )
+                fallback = "differential" if state.uncertainty.classification < self.confidence_threshold else "ABCDE"
+                return ["retrieve_evidence"], fallback
             if (
                 not state.evidence_assessment.sufficient
                 and state.evidence_assessment.cycles_completed < self.evidence.max_cycles
             ):
-                return "retrieve_evidence", "ABCDE"
-            return "generate_explanation", "validated_inputs_ready"
+                return ["retrieve_evidence"], "ABCDE"
+            return ["generate_explanation"], "validated_inputs_ready"
 
-        # ── 3. Synthesis & Completion ──────────────────────────────────────
         if state.final_report is None:
-            return "generate_report", "validated_synthesis_ready"
-        return "finish_case", "report_ready"
+            return ["generate_report"], "validated_synthesis_ready"
+        return ["finish_case"], "report_ready"
+
+    def choose_next_action(self, state: CaseState) -> Tuple[str, str]:
+        """Use an LLM planner over the current CaseState with safe fallback.
+
+        The available function names are regenerated on every loop iteration,
+        so selection responds to the actual state rather than a hard-coded
+        phase counter. If the model, key, network, or response is unavailable,
+        the same eligible action is selected deterministically.
+        """
+        allowed_actions, fallback_reason = self._eligible_actions(state)
+        mind_decision = self._deliberate_with_mind(state, allowed_actions)
+        if mind_decision:
+            self._latest_thought = str(mind_decision.get("thought") or "")
+            reason = str(mind_decision.get("reason") or fallback_reason)
+            return str(mind_decision["action"]), reason
+        return allowed_actions[0], fallback_reason
 
     def _should_adapt_from_gradcam(self, state: CaseState) -> bool:
         """Evaluate Grad-CAM visual attention metrics to determine if reclassification is warranted."""

@@ -1,4 +1,4 @@
-"""
+﻿"""
 Core Diagnosis Engine
 ======================
 
@@ -36,7 +36,7 @@ from ..explainability.gradcam import SwinGradCAM
 
 class CoreDiagnosisEngine:
     """
-    Core Diagnosis Engine — single source of truth for melanoma diagnosis.
+    Core Diagnosis Engine â€” single source of truth for melanoma diagnosis.
 
     Initializes all AI components from a config file and provides
     a simple `.diagnose(image_path)` interface that returns a
@@ -76,7 +76,7 @@ class CoreDiagnosisEngine:
             max_processing_dimension=preproc_cfg.get("max_processing_dimension", 1600),
         )
 
-        # Classifier — prefer explicit classification_checkpoint; fall back to
+        # Classifier â€” prefer explicit classification_checkpoint; fall back to
         # legacy best_swin_checkpoint.pth inside the checkpoints folder.
         project_root = Path(self.config_path).parent
         if paths.get("classification_checkpoint"):
@@ -105,12 +105,14 @@ class CoreDiagnosisEngine:
         # Feature extractor
         self.feature_extractor = ABCFeatureExtractor(config=feat_cfg)
 
-        # Grad-CAM (reuses the same Swin model weights)
-        self.gradcam = SwinGradCAM(
-            checkpoint_path=checkpoint,
-            model_name=cls_cfg["model_name"],
+        # Grad-CAM — reuses the already-loaded SwinV2 model from the classifier,
+        # avoiding a second torch.load() of the 1.4 GB checkpoint file.
+        self.gradcam = SwinGradCAM.from_model(
+            model=self.classifier.model,
+            class_names=self.classifier.class_names,
             img_size=cls_cfg["img_size"],
             device=device,
+            model_lock=self.classifier.model_lock,
         )
 
         # Inference pipeline
@@ -150,6 +152,24 @@ class CoreDiagnosisEngine:
 
         # Run inference pipeline
         raw = self.pipeline.run(image_path)
+        # Persist the exact cleaned image supplied to both vision models so
+        # the PDF can show the real analysis input. Measurements and scale
+        # calibration below still use ``original_image`` at native resolution.
+        preprocessing_applied = raw["preprocessing_applied"]
+        if self.config.get("preprocessing", {}).get("save_preprocessed_preview", True):
+            try:
+                preview_dir = Path(self.config_path).parent / self.config["paths"]["outputs"] / "preprocessed"
+                preview_dir.mkdir(parents=True, exist_ok=True)
+                preview_stem = request_id or img_path.stem
+                preview_path = preview_dir / f"{preview_stem}_preprocessed.png"
+                cv2.imwrite(
+                    str(preview_path),
+                    cv2.cvtColor(np.asarray(raw["preprocessed_image"]), cv2.COLOR_RGB2BGR),
+                )
+                preprocessing_applied["preprocessed_image_path"] = str(preview_path)
+            except Exception as exc:
+                logger.warning("Could not save preprocessed report image: %s", exc)
+                preprocessing_applied["preprocessed_image_path"] = None
         raw_mask = np.asarray(raw["mask"])
 
         # Detect a known reference before choosing the lesion component.  If

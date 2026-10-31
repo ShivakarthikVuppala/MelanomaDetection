@@ -1,4 +1,4 @@
-"""
+﻿"""
 Explainability Agent — Phase 3
 ================================
 
@@ -73,9 +73,10 @@ class EvidenceGroundedExplanationService:
         self.llm_provider = config.get("llm_provider", "gemini")
         self.model_name = config.get("model") or os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
         self.fallback_model = config.get("fallback_model") or os.environ.get("GEMINI_FALLBACK_MODEL", "gemini-3.1-flash-lite")
-        self.max_retries = int(config.get("max_retries", 5))
-        self.retry_delay = float(config.get("retry_delay", 3.0))
-        self.fallback_after_retries = int(config.get("fallback_after_retries", 3))
+        self.max_retries = int(config.get("max_retries", 2))
+        self.retry_delay = float(config.get("retry_delay", 1.0))
+        self.fallback_after_retries = int(config.get("fallback_after_retries", 1))
+        self.request_timeout_seconds = float(config.get("request_timeout_seconds", 30.0))
         self.ail_threshold = config.get("gradcam_ail_threshold", 0.30)
         self._gemini_model = None
         logger.info(
@@ -134,9 +135,9 @@ class EvidenceGroundedExplanationService:
                 "Get a free key at https://aistudio.google.com/apikey"
             )
 
-        from google import genai
+        from .llm_client import create_gemini_client
 
-        client = genai.Client(api_key=api_key)
+        client = create_gemini_client(api_key, timeout_seconds=self.request_timeout_seconds)
         self._gemini_model = client
         logger.info("Gemini client initialized (%s)", self.model_name)
         return client
@@ -403,7 +404,17 @@ IMPORTANT GUIDELINES:
                     current_model,
                 )
                 chat = client.chats.create(model=current_model)
-                response = chat.send_message(prompt)
+                import concurrent.futures as _cf
+                with _cf.ThreadPoolExecutor(max_workers=1) as _pool:
+                    _future = _pool.submit(chat.send_message, prompt)
+                    try:
+                        response = _future.result(timeout=45)
+                    except _cf.TimeoutError:
+                        raise TimeoutError(
+                            f"Gemini model '{current_model}' did not respond within 45 s "
+                            f"(attempt {attempt}/{self.max_retries}). "
+                            "Check network connectivity or try again later."
+                        )
 
                 response_text = getattr(response, "text", None) or ""
                 if not response_text.strip():

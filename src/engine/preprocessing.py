@@ -63,6 +63,8 @@ class DermoscopyPreprocessor:
         # artifact cleanup at a bounded working resolution.
         self.max_processing_dimension = max(512, int(max_processing_dimension))
         self._last_hair_removed: np.ndarray | None = None
+        self._last_input_shape: tuple[int, int] | None = None
+        self._last_working_shape: tuple[int, int] | None = None
 
     def process(self, image: np.ndarray) -> np.ndarray:
         """
@@ -75,6 +77,7 @@ class DermoscopyPreprocessor:
             Preprocessed RGB image as numpy array (H, W, 3), uint8.
         """
         original_shape = image.shape[:2]
+        self._last_input_shape = original_shape
         scale = min(1.0, self.max_processing_dimension / max(original_shape))
         if scale < 1.0:
             work = cv2.resize(
@@ -85,6 +88,7 @@ class DermoscopyPreprocessor:
             )
         else:
             work = image.copy()
+        self._last_working_shape = work.shape[:2]
         result = work
 
         if self.hair_removal:
@@ -211,9 +215,17 @@ class DermoscopyPreprocessor:
         return cv2.cvtColor(lab, cv2.COLOR_LAB2RGB)
 
     def get_applied_steps(self) -> dict:
-        """Return a dict of which preprocessing steps are enabled."""
+        """Return applied operations plus the bounded working-image geometry."""
+        original_height, original_width = self._last_input_shape or (None, None)
+        working_height, working_width = self._last_working_shape or (None, None)
         return {
             "hair_removal": self.hair_removal,
             "illumination_normalization": self.illumination_normalization,
             "preserve_scale_reference": self.preserve_scale_reference,
+            "resized_for_preprocessing": bool(
+                self._last_input_shape and self._last_working_shape
+                and self._last_input_shape != self._last_working_shape
+            ),
+            "original_size": {"width": original_width, "height": original_height},
+            "working_size": {"width": working_width, "height": working_height},
         }

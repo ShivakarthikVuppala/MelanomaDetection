@@ -47,6 +47,11 @@ class PreprocessingInfo(BaseModel):
     """Records which preprocessing steps were applied to the input image."""
     hair_removal: bool = False
     illumination_normalization: bool = False
+    preserve_scale_reference: bool = True
+    resized_for_preprocessing: bool = False
+    original_size: Dict[str, Optional[int]] = Field(default_factory=dict)
+    working_size: Dict[str, Optional[int]] = Field(default_factory=dict)
+    preprocessed_image_path: Optional[str] = None
 
 
 class ScaleCalibrationInfo(BaseModel):

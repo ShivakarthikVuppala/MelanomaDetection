@@ -5,6 +5,7 @@ Patient history and evolution are handled by the first-class ClinicalContextAgen
 the clinical methods below are retained only as backward-compatibility shims.
 """
 from __future__ import annotations
+import threading
 from typing import Any, Dict, Iterable, List, Optional
 from .state import CaseState, EvidenceAssessment, EvidenceRecord
 
@@ -13,6 +14,7 @@ class EvidenceAgent:
     def __init__(self, max_cycles: int = 3, backend: Any = None, clinical_context: Any = None):
         self.max_cycles = max_cycles
         self._backend = backend
+        self._backend_init_lock = threading.Lock()
         # Backward-compatibility only: the Clinical Context Agent is now a first-class
         # top-level agent orchestrated directly. This retained instance and the shims
         # below keep older callers (and injected test doubles) working.
@@ -34,9 +36,17 @@ class EvidenceAgent:
 
     def _backend_instance(self):
         if self._backend is None:
-            from rag_pipeline.agent import create_backend
-            self._backend = create_backend()
+            with self._backend_init_lock:
+                if self._backend is None:
+                    from rag_pipeline.agent import create_backend
+                    self._backend = create_backend()
         return self._backend
+
+    def warm_up(self) -> None:
+        backend = self._backend_instance()
+        if hasattr(backend, "warm_up"):
+            backend.warm_up()
+
     def retrieve_evidence(self, state: CaseState, evidence_goal: str) -> CaseState:
         try:
             backend = self._backend_instance()

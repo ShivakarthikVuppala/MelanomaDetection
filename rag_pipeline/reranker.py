@@ -16,23 +16,35 @@ similarity alone.
 """
 
 import logging
+import threading
+import time
 from typing import List, Dict, Any
 
 logger = logging.getLogger(__name__)
 
 # Global model cache
 _cross_encoder = None
+_cross_encoder_lock = threading.Lock()
+_cross_encoder_retry_after = 0.0
 
 
 def get_cross_encoder(model_name: str = None):
+    # Startup warm-up and the first upload can arrive together.
+    with _cross_encoder_lock:
+        return _load_cross_encoder(model_name)
+
+
+def _load_cross_encoder(model_name: str = None):
     """
     Lazy-load the cross-encoder model.
     Cached globally to avoid reloading on every call.
     Uses CUDA if available, otherwise CPU.
     """
-    global _cross_encoder
+    global _cross_encoder, _cross_encoder_retry_after
 
     if _cross_encoder is None:
+        if time.monotonic() < _cross_encoder_retry_after:
+            return None
         # Get model name from config
         if model_name is None:
             try:
@@ -55,14 +67,17 @@ def get_cross_encoder(model_name: str = None):
 
             logger.info(f"Reranker device: {device}")
 
-            _cross_encoder = CrossEncoder(
-                model_name,
-                device=device
-            )
+            try:
+                # Cached weights must not wait on Hugging Face metadata calls
+                # every time the backend restarts.
+                _cross_encoder = CrossEncoder(model_name, device=device, local_files_only=True)
+            except OSError:
+                _cross_encoder = CrossEncoder(model_name, device=device)
 
             logger.info(f"Cross-encoder loaded successfully: {model_name}")
 
         except ImportError:
+            _cross_encoder_retry_after = time.monotonic() + 60.0
             logger.warning(
                 "sentence-transformers or torch not installed. "
                 "Re-ranking will be skipped."
@@ -70,6 +85,8 @@ def get_cross_encoder(model_name: str = None):
             return None
 
         except Exception as e:
+            # Do not repeat a failed download for every query in the same case.
+            _cross_encoder_retry_after = time.monotonic() + 60.0
             logger.warning(
                 f"Failed to load cross-encoder '{model_name}': {e}. "
                 f"Re-ranking will be skipped."

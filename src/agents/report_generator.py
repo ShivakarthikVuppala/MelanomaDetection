@@ -492,23 +492,41 @@ class ReportRenderer:
         col_w = (PW - 5) / 2   # two equal columns with 5 mm gap
         img_h = 62              # fixed image height mm
 
+        # The first visual must be the exact image used by the classifier and
+        # segmenter, rather than the unprocessed upload.  The original remains
+        # the source for physical measurements and calibration, not the PDF's
+        # selected analysis layer.
+        preprocessed_path = getattr(diag.preprocessing, "preprocessed_image_path", None)
         orig_path = getattr(diag.metadata, "image_path", None)
         overlay_path = getattr(seg, "overlay_path", None)
+        preprocessed_ok = bool(preprocessed_path and Path(preprocessed_path).exists())
         orig_ok = bool(orig_path and Path(orig_path).exists())
         overlay_ok = bool(overlay_path and Path(overlay_path).exists())
 
-        if orig_ok or overlay_ok:
+        # Resolve Grad-CAM path before the guard so it can activate the block alone.
+        _gradcam_path_check = None
+        if self.include_gradcam:
+            _gradcam_path_check = getattr(explanation, "grad_cam_saved_path", None)
+            if _gradcam_path_check and not Path(_gradcam_path_check).exists():
+                _gradcam_path_check = None
+
+        if preprocessed_ok or orig_ok or overlay_ok or _gradcam_path_check:
             # Downsample before embedding.  Full-resolution dermoscopy images
             # can make a report tens of megabytes and can also cause slow,
             # awkward rendering in browser PDF viewers.
             with tempfile.TemporaryDirectory(prefix="meladetect_report_") as preview_dir:
                 image_specs = []
-                for label, source_path in (
-                    (("Original Image", orig_path),) if orig_ok else tuple()
-                ):
+                primary_image = (
+                    ("Preprocessed Image", preprocessed_path)
+                    if preprocessed_ok
+                    else ("Original Image (preprocessed copy unavailable)", orig_path)
+                )
+                for label, source_path in ((primary_image,) if (preprocessed_ok or orig_ok) else tuple()):
                     image_specs.append((label, source_path))
                 if overlay_ok:
                     image_specs.append(("Segmentation Overlay", overlay_path))
+                if _gradcam_path_check:
+                    image_specs.append(("Model Attention (Grad-CAM)", _gradcam_path_check))
 
                 prepared = []
                 for label, source_path in image_specs:

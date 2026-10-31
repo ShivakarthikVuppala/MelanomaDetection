@@ -37,7 +37,7 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 
 from .config import settings
 from .bm25_utils import load_bm25_index, bm25_search, reciprocal_rank_fusion
-from .reranker import rerank
+from .reranker import get_cross_encoder, rerank
 from .query_engine import generate_queries
 from .chunking_strategy import load_parent_store, expand_to_parents
 from .observability import MetricsCollector, global_metrics
@@ -122,7 +122,9 @@ _parent_store = load_parent_store(settings.PARENT_CHUNKS_PATH)
 _llm = ChatGoogleGenerativeAI(
     model=settings.LLM_MODEL,
     google_api_key=settings.GEMINI_API_KEY,
-    temperature=settings.LLM_TEMPERATURE
+    temperature=settings.LLM_TEMPERATURE,
+    timeout=settings.LLM_TIMEOUT_SECONDS,
+    max_retries=settings.LLM_MAX_RETRIES,
 )
 
 
@@ -180,6 +182,10 @@ class AdvancedRetrievalBackend:
         # Per-request mutable state
         self.reasoning_trace: List[Dict[str, Any]] = []
         self.metrics = MetricsCollector()
+
+    def warm_up(self) -> None:
+        """Load retrieval models without generating queries or calling the LLM."""
+        get_cross_encoder()
 
     # --------------------------------------------------------
     # Reset reasoning trace
